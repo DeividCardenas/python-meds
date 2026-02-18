@@ -7,6 +7,8 @@ import {
   type SearchMedicamentosQueryVariables,
 } from "../graphql/generated";
 
+const ACTIVE_DISTANCE_THRESHOLD = 0.2;
+
 export function BuscadorMedicamentos() {
   const [texto, setTexto] = useState("");
   const [empresa, setEmpresa] = useState("");
@@ -28,7 +30,8 @@ export function BuscadorMedicamentos() {
     });
   };
 
-  const getBadgeStatus = (distancia: number) => (distancia <= 0.2 ? "ACTIVO" : "INACTIVO/VENCIDO");
+  const getBadgeStatus = (distancia: number) =>
+    distancia <= ACTIVE_DISTANCE_THRESHOLD ? "ACTIVO" : "INACTIVO/VENCIDO";
 
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
@@ -82,6 +85,8 @@ export function BuscadorMedicamentos() {
             </thead>
             <tbody>
               {(data?.buscarMedicamentos ?? []).map((item) => {
+                const precio =
+                  "precio" in item && typeof item.precio === "number" ? item.precio : null;
                 const status = getBadgeStatus(item.distancia);
                 return (
                   <tr key={item.id} className="bg-white transition hover:bg-slate-50">
@@ -97,7 +102,9 @@ export function BuscadorMedicamentos() {
                       </span>
                     </td>
                     <td className="border-b border-slate-100 px-4 py-3 text-right font-mono text-slate-700">
-                      {(item.distancia * 100000).toFixed(2)}
+                      {typeof precio === "number"
+                        ? precio.toLocaleString("es-CO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+                        : "N/D"}
                     </td>
                   </tr>
                 );

@@ -7,6 +7,8 @@ import {
   type CargarInvimaMutationVariables,
 } from "../graphql/generated";
 
+const MAX_HISTORY_ITEMS = 5;
+
 export function CargaInvima() {
   const [file, setFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -26,7 +28,7 @@ export function CargaInvima() {
     const result = await cargarInvima({ variables: { file } });
     const payload = result.data?.cargarMaestroInvima;
     if (payload) {
-      setHistorial((prev) => [payload, ...prev].slice(0, 5));
+      setHistorial((prev) => [{ ...payload, filename: payload.filename || file.name }, ...prev].slice(0, MAX_HISTORY_ITEMS));
     }
   };
 
@@ -98,12 +100,9 @@ export function CargaInvima() {
 
       {currentStatus === "PROCESSING" ? (
         <div className="mt-5">
-          <div className="mb-1 flex items-center justify-between text-xs font-medium text-slate-600">
-            <span>Procesando archivo</span>
-            <span>66%</span>
-          </div>
+          <div className="mb-1 text-xs font-medium text-slate-600">Procesando archivo</div>
           <div className="h-2 w-full overflow-hidden rounded-full bg-slate-200">
-            <div className="h-full w-2/3 rounded-full bg-teal-600 transition-all" />
+            <div className="h-full w-full animate-pulse rounded-full bg-teal-600" />
           </div>
         </div>
       ) : null}
