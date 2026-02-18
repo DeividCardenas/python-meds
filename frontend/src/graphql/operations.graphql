@@ -1,0 +1,15 @@
+query SearchMedicamentos($texto: String!, $empresa: String) {
+  buscarMedicamentos(texto: $texto, empresa: $empresa) {
+    id
+    nombreLimpio
+    distancia
+  }
+}
+
+mutation CargarInvima($file: Upload!) {
+  cargarMaestroInvima(file: $file) {
+    id
+    filename
+    status
+  }
+}
