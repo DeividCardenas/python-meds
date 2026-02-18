@@ -25,10 +25,9 @@ class Medicamento(SQLModel, table=True):
 
     id: UUID = Field(
         default_factory=uuid4,
-        primary_key=True,
         sa_column=Column(PGUUID(as_uuid=True), primary_key=True),
     )
-    nombre_limpio: str = Field(index=True, sa_column=Column(String, nullable=False, index=True))
+    nombre_limpio: str = Field(sa_column=Column(String, nullable=False, index=True))
     embedding: list[float] | None = Field(default=None, sa_column=Column(Vector(EMBEDDING_DIMENSION), nullable=True))
 
 
@@ -37,7 +36,6 @@ class PrecioReferencia(SQLModel, table=True):
 
     id: UUID = Field(
         default_factory=uuid4,
-        primary_key=True,
         sa_column=Column(PGUUID(as_uuid=True), primary_key=True),
     )
     medicamento_id: UUID = Field(
@@ -54,7 +52,6 @@ class CargaArchivo(SQLModel, table=True):
 
     id: UUID = Field(
         default_factory=uuid4,
-        primary_key=True,
         sa_column=Column(PGUUID(as_uuid=True), primary_key=True),
     )
     filename: str = Field(sa_column=Column(String, nullable=False))

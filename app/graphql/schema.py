@@ -4,12 +4,11 @@ import re
 from typing import Optional
 
 import strawberry
-from sqlalchemy import bindparam, func, select
 from strawberry.file_uploads import Upload
-from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.db import AsyncSessionLocal
-from app.models.medicamento import CargaArchivo, CargaStatus, Medicamento, PrecioReferencia
+from app.models.medicamento import CargaArchivo, CargaStatus
+from app.services.search import buscar_medicamentos_hibrido
 from app.worker.tasks import task_procesar_archivo
 
 
@@ -27,24 +26,10 @@ class CargaArchivoNode:
     status: str
 
 
-async def _buscar_medicamentos_mock(
-    session: AsyncSession,
-    texto: str,
-    empresa: Optional[str],
-) -> list[MedicamentoNode]:
-    statement = select(Medicamento).where(Medicamento.nombre_limpio.ilike(func.concat("%", bindparam("texto"), "%")))
-    statement = statement.params(texto=texto)
-    if empresa:
-        statement = (
-            statement.join(PrecioReferencia, PrecioReferencia.medicamento_id == Medicamento.id)
-            .where(PrecioReferencia.empresa == bindparam("empresa"))
-            .params(empresa=empresa)
-            .distinct()
-        )
-    statement = statement.limit(10)
-    medicamentos = (await session.exec(statement)).all()
+async def _buscar_medicamentos(session, texto: str, empresa: Optional[str]) -> list[MedicamentoNode]:
+    medicamentos = await buscar_medicamentos_hibrido(session, texto=texto, empresa=empresa)
     return [
-        MedicamentoNode(id=strawberry.ID(str(item.id)), nombre_limpio=item.nombre_limpio, distancia=0.0)
+        MedicamentoNode(id=strawberry.ID(str(item[0])), nombre_limpio=item[1], distancia=float(item[2]))
         for item in medicamentos
     ]
 
@@ -58,7 +43,7 @@ class Query:
         empresa: Optional[str] = None,
     ) -> list[MedicamentoNode]:
         async with AsyncSessionLocal() as session:
-            return await _buscar_medicamentos_mock(session, texto=texto, empresa=empresa)
+            return await _buscar_medicamentos(session, texto=texto, empresa=empresa)
 
 
 @strawberry.type
