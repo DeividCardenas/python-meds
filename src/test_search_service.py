@@ -2,6 +2,7 @@ import unittest
 
 from sqlalchemy.dialects import postgresql
 
+from app.models.medicamento import EMBEDDING_DIMENSION
 from app.services.search import _construir_statement_hibrido, _preparar_texto_busqueda
 
 
@@ -13,11 +14,11 @@ class SearchServiceTests(unittest.TestCase):
     def test_preparar_texto_no_hace_equivalencias_de_unidades(self):
         self.assertNotEqual(_preparar_texto_busqueda("Dolex 1g"), _preparar_texto_busqueda("Dolex 1000mg"))
 
-    def test_statement_hibrido_usa_full_text_y_pgvector_con_embedding(self):
+    def test_statement_hibrido_includes_fts_and_vector(self):
         statement, params = _construir_statement_hibrido(
             texto_preparado="dolex 500 mg",
             empresa=None,
-            query_embedding=[0.0] * 768,
+            query_embedding=[0.0] * EMBEDDING_DIMENSION,
         )
         sql = str(statement.compile(dialect=postgresql.dialect()))
 
