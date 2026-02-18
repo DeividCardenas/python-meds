@@ -20,7 +20,9 @@ EMBEDDING_MODEL = "models/text-embedding-004"
 SLEEP_SECONDS = float(os.getenv("EMBEDDING_SLEEP_SECONDS", "0.2"))
 MAX_RETRIES = int(os.getenv("EMBEDDING_MAX_RETRIES", "3"))
 INSERT_BATCH_SIZE = int(os.getenv("PG_INSERT_BATCH_SIZE", "100"))
-GENERIC_NAME_TOKENS = ("PENDIENTE", "INSUMO", "VARIOS")
+MIN_NAME_LENGTH = 3
+FU_WARNING_THRESHOLD = 50
+REJECTED_NAME_TERMS = ("PENDIENTE", "INSUMO", "VARIOS")
 
 
 def _pick_source_column(df: pd.DataFrame) -> str:
@@ -73,12 +75,12 @@ def validar_fila(row: pd.Series) -> Tuple[bool, str, bool]:
 
     rejection_reasons: List[str] = []
     nombre_upper = nombre.upper()
-    if len(nombre) < 3 or any(token in nombre_upper for token in GENERIC_NAME_TOKENS):
+    if len(nombre) < MIN_NAME_LENGTH or any(token in nombre_upper for token in REJECTED_NAME_TERMS):
         rejection_reasons.append("Nombre Inválido")
     if precio is None or pd.isna(precio) or not isinstance(precio, (int, float)) or precio <= 0:
         rejection_reasons.append("Precio Cero o Nulo")
 
-    warning_fu = isinstance(fu, (int, float)) and not pd.isna(fu) and fu > 50
+    warning_fu = isinstance(fu, (int, float)) and not pd.isna(fu) and fu > FU_WARNING_THRESHOLD
     return not rejection_reasons, "; ".join(rejection_reasons), bool(warning_fu)
 
 
