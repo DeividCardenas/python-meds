@@ -10,6 +10,8 @@ from sqlalchemy import JSON, Column, ForeignKey, Numeric, String
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlmodel import Field, SQLModel
 
+EMBEDDING_DIMENSION = 768
+
 
 class CargaStatus(str, Enum):
     PENDING = "PENDING"
@@ -27,7 +29,7 @@ class Medicamento(SQLModel, table=True):
         sa_column=Column(PGUUID(as_uuid=True), primary_key=True),
     )
     nombre_limpio: str = Field(index=True, sa_column=Column(String, nullable=False, index=True))
-    embedding: list[float] | None = Field(default=None, sa_column=Column(Vector(768), nullable=True))
+    embedding: list[float] | None = Field(default=None, sa_column=Column(Vector(EMBEDDING_DIMENSION), nullable=True))
 
 
 class PrecioReferencia(SQLModel, table=True):

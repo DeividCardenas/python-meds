@@ -8,7 +8,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 DATABASE_URL = os.getenv(
     "DB_URL",
-    "postgresql+asyncpg://postgres:postgres@db:5432/postgres",
+    "postgresql+asyncpg://postgres:postgres@db:5432/meds",
 )
 
 engine: AsyncEngine = create_async_engine(DATABASE_URL, echo=False, future=True)

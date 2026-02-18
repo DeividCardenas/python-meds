@@ -13,6 +13,6 @@ celery_app = Celery(
 
 @celery_app.task(name="task_procesar_archivo")
 def task_procesar_archivo(carga_id: str, filename: str) -> dict[str, str]:
-    # Placeholder para ETL pesado en background.
+    # Placeholder for heavy ETL processing in background.
     time.sleep(1)
     return {"carga_id": carga_id, "filename": filename, "status": "COMPLETED"}
