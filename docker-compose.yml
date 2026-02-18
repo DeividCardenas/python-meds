@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   db:
     image: pgvector/pgvector:pg15
@@ -17,8 +15,8 @@ services:
     ports:
       - "${REDIS_PORT:-6379}:6379"
 
-  web:
-    build: .
+  backend:
+    build: ./backend
     command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     environment:
       DB_URL: ${DB_URL:-postgresql+asyncpg://postgres:postgres@db:5432/meds}
@@ -26,7 +24,7 @@ services:
       CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
       OPENAI_KEY: ${OPENAI_KEY:-}
     volumes:
-      - .:/app
+      - ./backend:/app
     ports:
       - "${WEB_PORT:-8000}:8000"
     depends_on:
@@ -34,7 +32,7 @@ services:
       - redis
 
   worker:
-    build: .
+    build: ./backend
     command: sh -c "alembic upgrade head && celery -A app.worker.tasks.celery_app worker --loglevel=info"
     environment:
       DB_URL: ${DB_URL:-postgresql+asyncpg://postgres:postgres@db:5432/meds}
@@ -42,10 +40,19 @@ services:
       CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
       OPENAI_KEY: ${OPENAI_KEY:-}
     volumes:
-      - .:/app
+      - ./backend:/app
     depends_on:
       - db
       - redis
+
+  frontend:
+    build: ./frontend
+    environment:
+      VITE_API_URL: ${VITE_API_URL:-http://localhost:8000/graphql}
+    ports:
+      - "${FRONTEND_PORT:-3000}:80"
+    depends_on:
+      - backend
 
 volumes:
   postgres_data:
