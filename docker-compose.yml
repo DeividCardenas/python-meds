@@ -19,7 +19,7 @@ services:
 
   web:
     build: .
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     environment:
       DB_URL: ${DB_URL:-postgresql+asyncpg://postgres:postgres@db:5432/meds}
       CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
@@ -35,7 +35,7 @@ services:
 
   worker:
     build: .
-    command: celery -A app.worker.tasks.celery_app worker --loglevel=info
+    command: sh -c "alembic upgrade head && celery -A app.worker.tasks.celery_app worker --loglevel=info"
     environment:
       DB_URL: ${DB_URL:-postgresql+asyncpg://postgres:postgres@db:5432/meds}
       CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}

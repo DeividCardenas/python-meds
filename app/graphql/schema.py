@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Optional
+from uuid import UUID
 
 import strawberry
 from strawberry.file_uploads import Upload
+from sqlmodel import select
 
 from app.core.db import AsyncSessionLocal
 from app.models.medicamento import CargaArchivo, CargaStatus
@@ -45,6 +48,21 @@ class Query:
         async with AsyncSessionLocal() as session:
             return await _buscar_medicamentos(session, texto=texto, empresa=empresa)
 
+    @strawberry.field
+    async def get_status_carga(self, id: strawberry.ID) -> Optional[CargaArchivoNode]:
+        try:
+            carga_id = UUID(str(id))
+        except ValueError:
+            return None
+        async with AsyncSessionLocal() as session:
+            carga = (
+                await session.exec(select(CargaArchivo).where(CargaArchivo.id == carga_id))
+            ).first()
+            if carga is None:
+                return None
+            status = carga.status.value if isinstance(carga.status, CargaStatus) else str(carga.status)
+            return CargaArchivoNode(id=strawberry.ID(str(carga.id)), filename=carga.filename, status=status)
+
 
 @strawberry.type
 class Mutation:
@@ -70,13 +88,21 @@ class Mutation:
         safe_stem = re.sub(r"[^a-zA-Z0-9_-]", "_", stem) or "upload"
         safe_extension = re.sub(r"[^a-zA-Z0-9]", "", extension)
         filename = f"{safe_stem}.{safe_extension}" if safe_extension else safe_stem
+        uploads_dir = Path("/app/uploads")
+        uploads_dir.mkdir(parents=True, exist_ok=True)
+
         async with AsyncSessionLocal() as session:
             carga = CargaArchivo(filename=filename, status=CargaStatus.PENDING)
             session.add(carga)
             await session.commit()
             await session.refresh(carga)
 
-        task_procesar_archivo.delay(str(carga.id), filename)
+        stored_path = uploads_dir / f"{carga.id}_{filename}"
+        file.file.seek(0)
+        with stored_path.open("wb") as output_file:
+            output_file.write(file.file.read())
+
+        task_procesar_archivo.delay(str(carga.id), str(stored_path))
         status = carga.status.value if isinstance(carga.status, CargaStatus) else str(carga.status)
         return CargaArchivoNode(id=strawberry.ID(str(carga.id)), filename=carga.filename, status=status)
 
