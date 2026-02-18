@@ -71,7 +71,10 @@ def _extract_records(
     default_company: Optional[str],
 ) -> List[Tuple[str, str, Optional[float], Optional[float], Optional[float]]]:
     if company_column is None and not default_company:
-        raise KeyError("No se encontró columna Empresa/Laboratorio/Fuente. Use --empresa para asignar una empresa por defecto.")
+        raise KeyError(
+            "No se encontró columna Empresa/empresa/Laboratorio/laboratorio/Fuente/fuente. "
+            "Use --empresa para asignar una empresa por defecto."
+        )
 
     precio_column = _pick_numeric_column(df, "Precio", "precio")
     fu_column = _pick_numeric_column(df, "FU", "fu")
@@ -92,7 +95,10 @@ def _extract_records(
         if not medicine_name:
             continue
 
-        company_name = str(raw_company).strip() if raw_company is not None else ""
+        if raw_company is None or pd.isna(raw_company):
+            company_name = ""
+        else:
+            company_name = str(raw_company).strip()
         if not company_name:
             company_name = str(default_company or "").strip()
         if not company_name:

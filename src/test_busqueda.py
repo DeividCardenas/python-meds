@@ -43,7 +43,7 @@ def buscar_similares(
         )
 
         with connection.cursor() as cursor:
-            if empresa:
+            if empresa is not None:
                 cursor.execute(
                     """
                     SELECT id, nombre_original, empresa, precio, fu, vpc, embedding <=> %s::vector AS distancia

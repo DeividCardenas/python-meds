@@ -1,15 +1,5 @@
 CREATE EXTENSION IF NOT EXISTS vector;
 
-CREATE TABLE IF NOT EXISTS medicamentos_embeddings (
-    id SERIAL PRIMARY KEY,
-    nombre_original TEXT NOT NULL,
-    empresa VARCHAR(255) NOT NULL,
-    precio NUMERIC(14, 2),
-    fu NUMERIC(18, 8),
-    vpc NUMERIC(18, 8),
-    embedding VECTOR(768) NOT NULL
-);
-
 ALTER TABLE medicamentos_embeddings
     ADD COLUMN IF NOT EXISTS empresa VARCHAR(255),
     ADD COLUMN IF NOT EXISTS precio NUMERIC(14, 2),
