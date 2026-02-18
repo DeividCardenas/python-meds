@@ -27,7 +27,13 @@ class Medicamento(SQLModel, table=True):
         default_factory=uuid4,
         sa_column=Column(PGUUID(as_uuid=True), primary_key=True),
     )
+    id_cum: str | None = Field(default=None, sa_column=Column(String, nullable=True, unique=True, index=True))
     nombre_limpio: str = Field(sa_column=Column(String, nullable=False, index=True))
+    atc: str | None = Field(default=None, sa_column=Column(String, nullable=True))
+    registro_invima: str | None = Field(default=None, sa_column=Column(String, nullable=True))
+    estado_regulatorio: str | None = Field(default=None, sa_column=Column(String, nullable=True))
+    laboratorio: str | None = Field(default=None, sa_column=Column(String, nullable=True))
+    embedding_status: str | None = Field(default=None, sa_column=Column(String, nullable=True))
     embedding: list[float] | None = Field(default=None, sa_column=Column(Vector(EMBEDDING_DIMENSION), nullable=True))
 
 

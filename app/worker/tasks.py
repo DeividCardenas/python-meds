@@ -13,6 +13,7 @@ from sqlmodel import select
 
 from app.core.db import AsyncSessionLocal
 from app.models.medicamento import CargaArchivo, CargaStatus, Medicamento, PrecioReferencia
+from app.services.invima_service import procesar_maestro_invima
 
 
 celery_app = Celery(
@@ -213,6 +214,32 @@ async def _procesar_archivo(carga_id: str, file_path: str) -> dict[str, Any]:
         raise
 
 
+async def _procesar_invima(carga_id: str, file_path: str) -> dict[str, Any]:
+    carga_uuid = UUID(carga_id)
+    await _actualizar_estado(carga_uuid, CargaStatus.PROCESSING)
+
+    try:
+        if not Path(file_path).exists():
+            raise FileNotFoundError(f"No existe el archivo maestro INVIMA: {file_path}")
+
+        errores_log = await procesar_maestro_invima(file_path)
+        await _actualizar_estado(carga_uuid, CargaStatus.COMPLETED, errores_log=errores_log)
+        return {"carga_id": carga_id, "status": CargaStatus.COMPLETED.value, **errores_log}
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Error procesando maestro INVIMA %s desde archivo %s", carga_id, file_path)
+        await _actualizar_estado(
+            carga_uuid,
+            CargaStatus.FAILED,
+            errores_log={"error": str(exc)},
+        )
+        raise
+
+
 @celery_app.task(name="task_procesar_archivo")
 def task_procesar_archivo(carga_id: str, file_path: str) -> dict[str, Any]:
     return asyncio.run(_procesar_archivo(carga_id, file_path))
+
+
+@celery_app.task(name="task_procesar_invima")
+def task_procesar_invima(carga_id: str, file_path: str) -> dict[str, Any]:
+    return asyncio.run(_procesar_invima(carga_id, file_path))

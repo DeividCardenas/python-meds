@@ -32,10 +32,17 @@ def upgrade() -> None:
     op.create_table(
         "medicamentos",
         sa.Column("id", sa.UUID(), nullable=False),
+        sa.Column("id_cum", sa.String(), nullable=True),
         sa.Column("nombre_limpio", sa.String(), nullable=False),
+        sa.Column("atc", sa.String(), nullable=True),
+        sa.Column("registro_invima", sa.String(), nullable=True),
+        sa.Column("estado_regulatorio", sa.String(), nullable=True),
+        sa.Column("laboratorio", sa.String(), nullable=True),
+        sa.Column("embedding_status", sa.String(), nullable=True),
         sa.Column("embedding", Vector(dim=768), nullable=True),
         sa.PrimaryKeyConstraint("id"),
     )
+    op.create_index(op.f("ix_medicamentos_id_cum"), "medicamentos", ["id_cum"], unique=True)
     op.create_index(op.f("ix_medicamentos_nombre_limpio"), "medicamentos", ["nombre_limpio"], unique=False)
     op.create_table(
         "precios_referencia",
@@ -54,6 +61,7 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_index(op.f("ix_precios_referencia_medicamento_id"), table_name="precios_referencia")
     op.drop_table("precios_referencia")
+    op.drop_index(op.f("ix_medicamentos_id_cum"), table_name="medicamentos")
     op.drop_index(op.f("ix_medicamentos_nombre_limpio"), table_name="medicamentos")
     op.drop_table("medicamentos")
     op.drop_table("cargas_archivo")
