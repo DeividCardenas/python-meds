@@ -2,14 +2,17 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import polars as pl
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.sql.dml import Insert
 
 from app.core.db import AsyncSessionLocal
 from app.models.medicamento import Medicamento
 
 INVIMA_BATCH_SIZE = 5000
+EMBEDDING_STATUS_PENDING = "PENDING"
 
 
 def leer_maestro_invima(file_path: str) -> pl.DataFrame:
@@ -55,7 +58,7 @@ def leer_maestro_invima(file_path: str) -> pl.DataFrame:
     )
 
 
-def construir_upsert_invima(rows: list[dict[str, Any]]):
+def construir_upsert_invima(rows: list[dict[str, Any]]) -> Insert:
     medicamentos_table = Medicamento.__table__
     statement = pg_insert(medicamentos_table).values(rows)
     return statement.on_conflict_do_update(
@@ -76,9 +79,11 @@ async def procesar_maestro_invima(file_path: str) -> dict[str, int]:
     total = 0
     async with AsyncSessionLocal() as session:
         for batch in dataframe.iter_slices(n_rows=INVIMA_BATCH_SIZE):
-            rows = batch.with_columns(pl.lit("PENDING").alias("embedding_status")).to_dicts()
+            rows = batch.with_columns(pl.lit(EMBEDDING_STATUS_PENDING).alias("embedding_status")).to_dicts()
             if not rows:
                 continue
+            for row in rows:
+                row["id"] = uuid4()
             await session.execute(construir_upsert_invima(rows))
             total += len(rows)
         await session.commit()
