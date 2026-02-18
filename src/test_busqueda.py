@@ -1,5 +1,5 @@
 import os
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import google.generativeai as genai
 import psycopg2
@@ -14,7 +14,11 @@ def _to_pgvector(values: List[float]) -> str:
     return "[" + ",".join(f"{value:.8f}" for value in values) + "]"
 
 
-def buscar_similares(texto_busqueda: str, top_k: int = 5) -> List[Tuple[int, str, float]]:
+def buscar_similares(
+    texto_busqueda: str,
+    empresa: Optional[str] = None,
+    top_k: int = 5,
+) -> List[Tuple[int, str, str, Optional[float], Optional[float], Optional[float], float]]:
     api_key = os.getenv("GOOGLE_API_KEY")
     if not api_key:
         raise EnvironmentError("Falta GOOGLE_API_KEY en variables de entorno.")
@@ -39,15 +43,27 @@ def buscar_similares(texto_busqueda: str, top_k: int = 5) -> List[Tuple[int, str
         )
 
         with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT id, nombre_original, embedding <=> %s::vector AS distancia
-                FROM medicamentos_embeddings
-                ORDER BY distancia
-                LIMIT %s
-                """,
-                (query_vector, top_k),
-            )
+            if empresa is not None:
+                cursor.execute(
+                    """
+                    SELECT id, nombre_original, empresa, precio, fu, vpc, embedding <=> %s::vector AS distancia
+                    FROM medicamentos_embeddings
+                    WHERE empresa = %s
+                    ORDER BY distancia
+                    LIMIT %s
+                    """,
+                    (query_vector, empresa, top_k),
+                )
+            else:
+                cursor.execute(
+                    """
+                    SELECT id, nombre_original, empresa, precio, fu, vpc, embedding <=> %s::vector AS distancia
+                    FROM medicamentos_embeddings
+                    ORDER BY distancia
+                    LIMIT %s
+                    """,
+                    (query_vector, top_k),
+                )
             return cursor.fetchall()
     finally:
         if connection is not None:
@@ -56,5 +72,6 @@ def buscar_similares(texto_busqueda: str, top_k: int = 5) -> List[Tuple[int, str
 
 if __name__ == "__main__":
     termino = os.getenv("TEXTO_BUSQUEDA", "Dolex")
-    for result_id, nombre, distancia in buscar_similares(termino, top_k=5):
-        print(f"{result_id}\t{nombre}\t{distancia:.6f}")
+    empresa = os.getenv("EMPRESA_BUSQUEDA")
+    for result_id, nombre, empresa_nombre, precio, fu, vpc, distancia in buscar_similares(termino, empresa=empresa, top_k=5):
+        print(f"{result_id}\t{nombre}\t{empresa_nombre}\t{precio}\t{fu}\t{vpc}\t{distancia:.6f}")
