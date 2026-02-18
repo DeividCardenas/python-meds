@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import os
 from pathlib import Path
 from typing import Any
@@ -8,6 +9,7 @@ import polars as pl
 
 from celery import Celery
 from sqlalchemy import insert
+from sqlmodel import select
 
 from app.core.db import AsyncSessionLocal
 from app.models.medicamento import CargaArchivo, CargaStatus, Medicamento, PrecioReferencia
@@ -18,6 +20,7 @@ celery_app = Celery(
     broker=os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0"),
     backend=os.getenv("CELERY_RESULT_BACKEND", "redis://redis:6379/1"),
 )
+logger = logging.getLogger(__name__)
 
 
 MIN_NAME_LENGTH = 3
@@ -94,6 +97,8 @@ async def _procesar_archivo(carga_id: str, file_path: str) -> dict[str, Any]:
     await _actualizar_estado(carga_uuid, CargaStatus.PROCESSING)
 
     try:
+        if not Path(file_path).exists():
+            raise FileNotFoundError(f"No existe el archivo a procesar: {file_path}")
         dataframe = _read_dataframe(file_path)
         columns = dataframe.columns
         name_column = _pick_existing_column(columns, NAME_COLUMNS)
@@ -143,9 +148,10 @@ async def _procesar_archivo(carga_id: str, file_path: str) -> dict[str, Any]:
         if valid_rows:
             medicamento_ids: dict[str, UUID] = {}
             for item in valid_rows:
-                medicamento_ids.setdefault(item["nombre_limpio"], uuid4())
+                nombre_limpio = item["nombre_limpio"]
+                if nombre_limpio not in medicamento_ids:
+                    medicamento_ids[nombre_limpio] = uuid4()
 
-            medicamentos_payload = [{"id": med_id, "nombre_limpio": name} for name, med_id in medicamento_ids.items()]
             precios_payload = [
                 {
                     "id": uuid4(),
@@ -159,7 +165,25 @@ async def _procesar_archivo(carga_id: str, file_path: str) -> dict[str, Any]:
             ]
 
             async with AsyncSessionLocal() as session:
-                await session.execute(insert(Medicamento), medicamentos_payload)
+                existing_medicamentos = (
+                    await session.exec(
+                        select(Medicamento.id, Medicamento.nombre_limpio).where(
+                            Medicamento.nombre_limpio.in_(list(medicamento_ids))
+                        )
+                    )
+                ).all()
+                existing_ids = {nombre_limpio: med_id for med_id, nombre_limpio in existing_medicamentos}
+                for nombre_limpio, med_id in existing_ids.items():
+                    medicamento_ids[nombre_limpio] = med_id
+
+                medicamentos_payload = [
+                    {"id": med_id, "nombre_limpio": name}
+                    for name, med_id in medicamento_ids.items()
+                    if name not in existing_ids
+                ]
+
+                if medicamentos_payload:
+                    await session.execute(insert(Medicamento), medicamentos_payload)
                 await session.execute(insert(PrecioReferencia), precios_payload)
                 await session.commit()
 
@@ -180,6 +204,7 @@ async def _procesar_archivo(carga_id: str, file_path: str) -> dict[str, Any]:
         await _actualizar_estado(carga_uuid, CargaStatus.COMPLETED, errores_log=errores_log)
         return {"carga_id": carga_id, "status": CargaStatus.COMPLETED.value, **errores_log}
     except Exception as exc:  # noqa: BLE001
+        logger.exception("Error procesando carga %s desde archivo %s", carga_id, file_path)
         await _actualizar_estado(
             carga_uuid,
             CargaStatus.FAILED,
