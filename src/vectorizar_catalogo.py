@@ -75,10 +75,10 @@ def validar_fila(row: pd.Series) -> Tuple[bool, str, bool]:
     nombre_upper = nombre.upper()
     if len(nombre) < 3 or any(token in nombre_upper for token in GENERIC_NAME_TOKENS):
         rejection_reasons.append("Nombre Inválido")
-    if precio is None or pd.isna(precio) or precio <= 0:
+    if precio is None or pd.isna(precio) or not isinstance(precio, (int, float)) or precio <= 0:
         rejection_reasons.append("Precio Cero o Nulo")
 
-    warning_fu = fu is not None and not pd.isna(fu) and fu > 50
+    warning_fu = isinstance(fu, (int, float)) and not pd.isna(fu) and fu > 50
     return not rejection_reasons, "; ".join(rejection_reasons), bool(warning_fu)
 
 
@@ -190,6 +190,7 @@ def main() -> None:
     genai.configure(api_key=api_key)
 
     df = pd.read_excel(SOURCE_FILE)
+    run_date = datetime.now().strftime("%Y%m%d")
     source_column = _pick_source_column(df)
     company_column = _pick_company_column(df)
     precio_column = _pick_numeric_column(df, "Precio", "precio")
@@ -213,7 +214,7 @@ def main() -> None:
     if rejected_count > 0:
         output_dir = BASE_DIR / "output"
         output_dir.mkdir(parents=True, exist_ok=True)
-        rejection_report_path = output_dir / f"reporte_rechazos_{datetime.now().strftime('%Y%m%d')}.csv"
+        rejection_report_path = output_dir / f"reporte_rechazos_{run_date}.csv"
         rejected_df[df.columns.tolist() + ["motivo_rechazo"]].to_csv(
             rejection_report_path,
             index=False,
