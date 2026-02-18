@@ -1,6 +1,7 @@
 import os
 import time
 import argparse
+from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
@@ -19,6 +20,7 @@ EMBEDDING_MODEL = "models/text-embedding-004"
 SLEEP_SECONDS = float(os.getenv("EMBEDDING_SLEEP_SECONDS", "0.2"))
 MAX_RETRIES = int(os.getenv("EMBEDDING_MAX_RETRIES", "3"))
 INSERT_BATCH_SIZE = int(os.getenv("PG_INSERT_BATCH_SIZE", "100"))
+GENERIC_NAME_TOKENS = ("PENDIENTE", "INSUMO", "VARIOS")
 
 
 def _pick_source_column(df: pd.DataFrame) -> str:
@@ -62,6 +64,22 @@ def _normalize_decimal(value) -> Optional[float]:
         return float(text)
     except ValueError:
         return None
+
+
+def validar_fila(row: pd.Series) -> Tuple[bool, str, bool]:
+    nombre = "" if pd.isna(row.get("_nombre_validacion")) else str(row.get("_nombre_validacion")).strip()
+    precio = row.get("_precio_validacion")
+    fu = row.get("_fu_validacion")
+
+    rejection_reasons: List[str] = []
+    nombre_upper = nombre.upper()
+    if len(nombre) < 3 or any(token in nombre_upper for token in GENERIC_NAME_TOKENS):
+        rejection_reasons.append("Nombre Inválido")
+    if precio is None or pd.isna(precio) or precio <= 0:
+        rejection_reasons.append("Precio Cero o Nulo")
+
+    warning_fu = fu is not None and not pd.isna(fu) and fu > 50
+    return not rejection_reasons, "; ".join(rejection_reasons), bool(warning_fu)
 
 
 def _extract_records(
@@ -174,11 +192,46 @@ def main() -> None:
     df = pd.read_excel(SOURCE_FILE)
     source_column = _pick_source_column(df)
     company_column = _pick_company_column(df)
-    records = _extract_records(df, source_column, company_column, args.empresa)
+    precio_column = _pick_numeric_column(df, "Precio", "precio")
+    fu_column = _pick_numeric_column(df, "FU", "fu")
+
+    df_validacion = df.copy()
+    df_validacion["_nombre_validacion"] = df_validacion[source_column]
+    df_validacion["_precio_validacion"] = (
+        df_validacion[precio_column].map(_normalize_decimal) if precio_column else None
+    )
+    df_validacion["_fu_validacion"] = df_validacion[fu_column].map(_normalize_decimal) if fu_column else None
+    df_validacion[["es_valida", "motivo_rechazo", "warning_fu"]] = df_validacion.apply(
+        validar_fila,
+        axis=1,
+        result_type="expand",
+    )
+
+    rejected_df = df_validacion[~df_validacion["es_valida"]].copy()
+    rejected_count = len(rejected_df)
+    rejection_report_path = None
+    if rejected_count > 0:
+        output_dir = BASE_DIR / "output"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        rejection_report_path = output_dir / f"reporte_rechazos_{datetime.now().strftime('%Y%m%d')}.csv"
+        rejected_df[df.columns.tolist() + ["motivo_rechazo"]].to_csv(
+            rejection_report_path,
+            index=False,
+            encoding="utf-8-sig",
+        )
+
+    df_validos = df_validacion[df_validacion["es_valida"]].copy()
+    records = _extract_records(df_validos, source_column, company_column, args.empresa)
     unique_names = sorted({record[0] for record in records})
+    total_processed = len(df_validacion)
 
     if not records:
         print("No hay medicamentos válidos para vectorizar/insertar.")
+        if rejection_report_path is not None:
+            print(f"[INFO] Reporte de rechazos: {rejection_report_path}")
+        print(f"Total Procesados: {total_processed}")
+        print("✅ Insertados/Actualizados en DB: 0")
+        print(f"⛔ Rechazados (Ver CSV): {rejected_count}")
         return
 
     connection = None
@@ -221,11 +274,16 @@ def main() -> None:
             connection.close()
     if inserted_count == 0:
         print("No se generaron embeddings para insertar.")
-        return
-    print(
-        f"Finalizado. Insertados/actualizados {inserted_count} registros "
-        f"con {len(unique_names)} embeddings únicos."
-    )
+    else:
+        print(
+            f"Finalizado. Insertados/actualizados {inserted_count} registros "
+            f"con {len(unique_names)} embeddings únicos."
+        )
+    if rejection_report_path is not None:
+        print(f"[INFO] Reporte de rechazos: {rejection_report_path}")
+    print(f"Total Procesados: {total_processed}")
+    print(f"✅ Insertados/Actualizados en DB: {inserted_count}")
+    print(f"⛔ Rechazados (Ver CSV): {rejected_count}")
 
 
 if __name__ == "__main__":
