@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 import time
-import unicodedata
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -59,10 +58,6 @@ ON CONFLICT (id_cum) DO UPDATE SET
 """
 
 
-def _strip_accents(value: str) -> str:
-    return "".join(char for char in unicodedata.normalize("NFD", value) if unicodedata.category(char) != "Mn")
-
-
 def leer_maestro_invima(file_path: str) -> pl.DataFrame:
     if not Path(file_path).exists():
         raise FileNotFoundError(f"No existe el archivo maestro INVIMA: {file_path}")
@@ -105,11 +100,12 @@ def leer_maestro_invima(file_path: str) -> pl.DataFrame:
             .str.replace_all(r"[®™]", " ")
             .str.replace_all(r"\s+", " ")
             .str.strip_chars()
-            .str.to_lowercase(),
+            .str.to_lowercase()
+            .str.normalize("NFD")
+            .str.replace_all(r"\p{M}+", ""),
             laboratorio=pl.col("LABORATORIO TITULAR"),
         )
         .filter(pl.col("id_cum").str.len_chars() > 1)
-        .with_columns(pl.col("nombre_limpio").map_elements(_strip_accents, return_dtype=pl.Utf8))
         .unique(subset=["id_cum"], keep="last")
     )
     logger.info("INVIMA registros tras deduplicacion por id_cum: %s", len(dataframe))
