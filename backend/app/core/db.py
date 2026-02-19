@@ -15,6 +15,11 @@ engine: AsyncEngine = create_async_engine(DATABASE_URL, echo=False, future=True)
 AsyncSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 
+def create_task_session_factory() -> tuple[AsyncEngine, async_sessionmaker[AsyncSession]]:
+    task_engine = create_async_engine(DATABASE_URL, echo=False, future=True)
+    return task_engine, async_sessionmaker(task_engine, class_=AsyncSession, expire_on_commit=False)
+
+
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
     async with AsyncSessionLocal() as session:
         yield session

@@ -1,6 +1,8 @@
 import unittest
+from pathlib import Path
+from tempfile import NamedTemporaryFile
 
-from app.worker.tasks import _es_nombre_valido, _normalize_decimal
+from app.worker.tasks import _cleanup_temp_file, _es_nombre_valido, _normalize_decimal, _run_async_safely
 
 
 class WorkerTasksTests(unittest.TestCase):
@@ -14,6 +16,18 @@ class WorkerTasksTests(unittest.TestCase):
         self.assertFalse(_es_nombre_valido("AB"))
         self.assertFalse(_es_nombre_valido("INSUMO"))
         self.assertTrue(_es_nombre_valido("Paracetamol"))
+
+    def test_cleanup_temp_file_elimina_tsv(self):
+        with NamedTemporaryFile(suffix=".tsv", delete=False) as handle:
+            path = Path(handle.name)
+        _cleanup_temp_file(str(path))
+        self.assertFalse(path.exists())
+
+    def test_run_async_safely_ejecuta_corutina(self):
+        async def _sample() -> str:
+            return "ok"
+
+        self.assertEqual(_run_async_safely(_sample()), "ok")
 
 
 if __name__ == "__main__":
