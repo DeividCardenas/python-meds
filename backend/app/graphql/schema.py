@@ -35,13 +35,13 @@ async def _buscar_medicamentos(session, texto: str, empresa: Optional[str]) -> l
     medicamentos = await buscar_medicamentos_hibrido(session, texto=texto, empresa=empresa)
     return [
         MedicamentoNode(
-            id=strawberry.ID(str(item[0])),
-            nombre_limpio=item[1],
-            distancia=float(item[2]),
-            id_cum=item[3],
-            laboratorio=item[4],
+            id=strawberry.ID(str(medicamento_id)),
+            nombre_limpio=nombre_limpio,
+            distancia=float(distancia),
+            id_cum=id_cum,
+            laboratorio=laboratorio,
         )
-        for item in medicamentos
+        for medicamento_id, nombre_limpio, distancia, id_cum, laboratorio, _rank in medicamentos
     ]
 
 

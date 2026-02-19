@@ -84,7 +84,7 @@ export function BuscadorMedicamentos() {
                 key={item.id}
                 className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition duration-200 hover:scale-105 hover:shadow-lg"
               >
-                <h3 className="text-lg font-bold text-slate-900">{item.nombreLimpio}</h3>
+                <h3 className="text-lg font-bold text-slate-900">{item.nombreLimpio || "Nombre comercial no disponible"}</h3>
                 <p className="mt-2 text-sm text-slate-500">
                   Principio activo: <span className="font-medium text-slate-600">{item.nombreLimpio}</span>
                 </p>
