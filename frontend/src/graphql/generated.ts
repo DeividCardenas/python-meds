@@ -12,6 +12,9 @@ export type SearchMedicamentosQuery = {
     distancia: number;
     idCum?: string | null;
     laboratorio?: string | null;
+    formaFarmaceutica?: string | null;
+    registroInvima?: string | null;
+    principioActivo?: string | null;
   }>;
 };
 
@@ -35,6 +38,9 @@ export const SearchMedicamentosDocument = gql`
       distancia
       idCum
       laboratorio
+      formaFarmaceutica
+      registroInvima
+      principioActivo
     }
   }
 ` as TypedDocumentNode<SearchMedicamentosQuery, SearchMedicamentosQueryVariables>;

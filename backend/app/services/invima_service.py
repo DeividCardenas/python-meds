@@ -28,6 +28,8 @@ TMP_INVIMA_COLUMNS = (
     "registro_invima",
     "estado_regulatorio",
     "laboratorio",
+    "principio_activo",
+    "forma_farmaceutica",
     "embedding_status",
 )
 REQUIRED_INVIMA_COLUMNS = (
@@ -39,6 +41,7 @@ REQUIRED_INVIMA_COLUMNS = (
     "REGISTRO INVIMA",
     "NOMBRE COMERCIAL",
     "PRINCIPIO ACTIVO",
+    "FORMA FARMACEUTICA",
     "LABORATORIO TITULAR",
 )
 CREATE_TMP_INVIMA_SQL = "CREATE TEMP TABLE tmp_invima (LIKE medicamentos EXCLUDING INDEXES) ON COMMIT DROP"
@@ -51,6 +54,8 @@ INSERT INTO medicamentos (
     registro_invima,
     estado_regulatorio,
     laboratorio,
+    principio_activo,
+    forma_farmaceutica,
     embedding_status
 )
 SELECT
@@ -61,6 +66,8 @@ SELECT
     registro_invima,
     estado_regulatorio,
     laboratorio,
+    principio_activo,
+    forma_farmaceutica,
     embedding_status
 FROM tmp_invima
 ON CONFLICT (id_cum) DO UPDATE SET
@@ -68,7 +75,9 @@ ON CONFLICT (id_cum) DO UPDATE SET
     registro_invima = EXCLUDED.registro_invima,
     estado_regulatorio = EXCLUDED.estado_regulatorio,
     nombre_limpio = EXCLUDED.nombre_limpio,
-    laboratorio = EXCLUDED.laboratorio
+    laboratorio = EXCLUDED.laboratorio,
+    principio_activo = EXCLUDED.principio_activo,
+    forma_farmaceutica = EXCLUDED.forma_farmaceutica
 """
 
 
@@ -108,6 +117,7 @@ def leer_maestro_invima(file_path: str) -> pl.DataFrame:
         pl.col("REGISTRO INVIMA").cast(pl.Utf8).fill_null("").str.strip_chars().str.replace_all(r"(?i)^sin dato$", ""),
         pl.col("NOMBRE COMERCIAL").cast(pl.Utf8).fill_null("").str.strip_chars().str.replace_all(r"(?i)^sin dato$", ""),
         pl.col("PRINCIPIO ACTIVO").cast(pl.Utf8).fill_null("").str.strip_chars().str.replace_all(r"(?i)^sin dato$", ""),
+        pl.col("FORMA FARMACEUTICA").cast(pl.Utf8).fill_null("").str.strip_chars().str.replace_all(r"(?i)^sin dato$", ""),
         pl.col("LABORATORIO TITULAR").cast(pl.Utf8).fill_null("").str.strip_chars().str.replace_all(r"(?i)^sin dato$", ""),
     )
     logger.info("INVIMA registros leidos: %s", len(dataframe))
@@ -135,6 +145,8 @@ def leer_maestro_invima(file_path: str) -> pl.DataFrame:
             .str.normalize("NFD")
             .str.replace_all(r"\p{M}+", ""),
             laboratorio=pl.col("LABORATORIO TITULAR"),
+            principio_activo=pl.col("PRINCIPIO ACTIVO"),
+            forma_farmaceutica=pl.col("FORMA FARMACEUTICA"),
         )
         .filter(pl.col("id_cum").str.len_chars() > 1)
         .unique(subset=["id_cum"], keep="last")
@@ -154,6 +166,8 @@ def construir_upsert_invima(rows: list[dict[str, Any]]) -> Insert:
             "estado_regulatorio": statement.excluded.estado_regulatorio,
             "nombre_limpio": statement.excluded.nombre_limpio,
             "laboratorio": statement.excluded.laboratorio,
+            "principio_activo": statement.excluded.principio_activo,
+            "forma_farmaceutica": statement.excluded.forma_farmaceutica,
         },
     )
 

@@ -33,6 +33,8 @@ class Medicamento(SQLModel, table=True):
     registro_invima: str | None = Field(default=None, sa_column=Column(String, nullable=True))
     estado_regulatorio: str | None = Field(default=None, sa_column=Column(String, nullable=True))
     laboratorio: str | None = Field(default=None, sa_column=Column(String, nullable=True))
+    principio_activo: str | None = Field(default=None, sa_column=Column(String, nullable=True))
+    forma_farmaceutica: str | None = Field(default=None, sa_column=Column(String, nullable=True))
     embedding_status: str | None = Field(default=None, sa_column=Column(String, nullable=True))
     embedding: list[float] | None = Field(default=None, sa_column=Column(Vector(EMBEDDING_DIMENSION), nullable=True))
 
