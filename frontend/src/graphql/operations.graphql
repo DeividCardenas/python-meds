@@ -3,6 +3,8 @@ query SearchMedicamentos($texto: String!, $empresa: String) {
     id
     nombreLimpio
     distancia
+    idCum
+    laboratorio
   }
 }
 

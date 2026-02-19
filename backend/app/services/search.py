@@ -97,7 +97,14 @@ def _construir_statement_hibrido(
         distancia_expr = literal(0.0).label("distancia")
 
     statement = (
-        select(Medicamento.id, Medicamento.nombre_limpio, distancia_expr, rank_expr)
+        select(
+            Medicamento.id,
+            Medicamento.nombre_limpio,
+            distancia_expr,
+            Medicamento.id_cum,
+            Medicamento.laboratorio,
+            rank_expr,
+        )
         .where(tsvector_expr.op("@@")(tsquery_expr))
         .order_by(rank_expr.desc(), distancia_expr.asc(), Medicamento.nombre_limpio.asc())
         .limit(10)
