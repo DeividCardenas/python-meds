@@ -98,9 +98,8 @@ async def _actualizar_estado(
 async def _procesar_archivo(carga_id: str, file_path: str) -> dict[str, Any]:
     carga_uuid = UUID(carga_id)
     task_engine, session_factory = create_task_session_factory()
-    await _actualizar_estado(session_factory, carga_uuid, CargaStatus.PROCESSING)
-
     try:
+        await _actualizar_estado(session_factory, carga_uuid, CargaStatus.PROCESSING)
         if not Path(file_path).exists():
             raise FileNotFoundError(f"No existe el archivo a procesar: {file_path}")
         dataframe = _read_dataframe(file_path)
@@ -223,9 +222,8 @@ async def _procesar_archivo(carga_id: str, file_path: str) -> dict[str, Any]:
 async def _procesar_invima(carga_id: str, file_path: str) -> dict[str, Any]:
     carga_uuid = UUID(carga_id)
     task_engine, session_factory = create_task_session_factory()
-    await _actualizar_estado(session_factory, carga_uuid, CargaStatus.PROCESSING)
-
     try:
+        await _actualizar_estado(session_factory, carga_uuid, CargaStatus.PROCESSING)
         if not Path(file_path).exists():
             raise FileNotFoundError(f"No existe el archivo maestro INVIMA: {file_path}")
 
@@ -247,8 +245,12 @@ async def _procesar_invima(carga_id: str, file_path: str) -> dict[str, Any]:
 
 def _cleanup_temp_file(file_path: str) -> None:
     path = Path(file_path)
-    if path.suffix.lower() == ".tsv" and path.exists():
+    if path.suffix.lower() != ".tsv" or not path.exists():
+        return
+    try:
         path.unlink()
+    except OSError:
+        logger.exception("No se pudo eliminar archivo temporal %s", file_path)
 
 
 def _run_async_safely(coro: Any) -> Any:
@@ -258,9 +260,6 @@ def _run_async_safely(coro: Any) -> Any:
         loop = None
 
     if loop and loop.is_running():
-        loop_thread_id = getattr(loop, "_thread_id", None)
-        if loop_thread_id is not None and loop_thread_id != threading.get_ident():
-            return asyncio.run_coroutine_threadsafe(coro, loop).result()
         result: dict[str, Any] = {}
         error: dict[str, Exception] = {}
 
@@ -273,7 +272,7 @@ def _run_async_safely(coro: Any) -> Any:
             finally:
                 local_loop.close()
 
-        thread = threading.Thread(target=_run_in_thread, daemon=True)
+        thread = threading.Thread(target=_run_in_thread)
         thread.start()
         thread.join()
         if "value" in error:
@@ -293,9 +292,11 @@ def _mark_failed(carga_id: str, exc: Exception) -> None:
     try:
         carga_uuid = UUID(carga_id)
     except ValueError:
+        logger.warning("No se pudo parsear carga_id invalido al marcar FAILED: %s", carga_id)
         return
-    task_engine, session_factory = create_task_session_factory()
+    task_engine = None
     try:
+        task_engine, session_factory = create_task_session_factory()
         _run_async_safely(
             _actualizar_estado(
                 session_factory,
@@ -307,7 +308,11 @@ def _mark_failed(carga_id: str, exc: Exception) -> None:
     except Exception:  # noqa: BLE001
         logger.exception("No se pudo actualizar estado FAILED para carga %s", carga_id)
     finally:
-        _run_async_safely(task_engine.dispose())
+        if task_engine is not None:
+            try:
+                _run_async_safely(task_engine.dispose())
+            except Exception:  # noqa: BLE001
+                logger.exception("No se pudo cerrar engine temporal para carga %s", carga_id)
 
 
 @celery_app.task(name="task_procesar_archivo")
