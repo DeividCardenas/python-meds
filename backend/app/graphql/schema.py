@@ -64,55 +64,56 @@ class Query:
             return CargaArchivoNode(id=strawberry.ID(str(carga.id)), filename=carga.filename, status=status)
 
 
+async def _registrar_carga(file: Upload, max_size_bytes: int | None = None) -> tuple[CargaArchivo, Path]:
+    if max_size_bytes is not None:
+        current_offset = file.file.tell()
+        file.file.seek(0, 2)
+        if file.file.tell() > max_size_bytes:
+            file.file.seek(current_offset)
+            raise ValueError("El archivo excede el tamaño máximo permitido (10MB).")
+        file.file.seek(current_offset)
+
+    incoming_name = (file.filename or "").replace("\0", "").strip()
+    base_name = incoming_name.split("/")[-1].split("\\")[-1]
+    if base_name in {"", ".", ".."}:
+        base_name = "upload.bin"
+
+    stem, dot, extension = base_name.rpartition(".")
+    if not dot:
+        stem, extension = base_name, ""
+
+    safe_stem = re.sub(r"[^a-zA-Z0-9_-]", "_", stem) or "upload"
+    safe_extension = re.sub(r"[^a-zA-Z0-9]", "", extension)
+    filename = f"{safe_stem}.{safe_extension}" if safe_extension else safe_stem
+    uploads_dir = Path("/app/uploads")
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+
+    async with AsyncSessionLocal() as session:
+        carga = CargaArchivo(filename=filename, status=CargaStatus.PENDING)
+        session.add(carga)
+        await session.commit()
+        await session.refresh(carga)
+
+    stored_path = uploads_dir / f"{carga.id}_{filename}"
+    file.file.seek(0)
+    with stored_path.open("wb") as output_file:
+        output_file.write(file.file.read())
+
+    return carga, stored_path
+
+
 @strawberry.type
 class Mutation:
-    async def _registrar_carga(self, file: Upload, max_size_bytes: int | None = None) -> tuple[CargaArchivo, Path]:
-        if max_size_bytes is not None:
-            current_offset = file.file.tell()
-            file.file.seek(0, 2)
-            if file.file.tell() > max_size_bytes:
-                file.file.seek(current_offset)
-                raise ValueError("El archivo excede el tamaño máximo permitido (10MB).")
-            file.file.seek(current_offset)
-
-        incoming_name = (file.filename or "").replace("\0", "").strip()
-        base_name = incoming_name.split("/")[-1].split("\\")[-1]
-        if base_name in {"", ".", ".."}:
-            base_name = "upload.bin"
-
-        stem, dot, extension = base_name.rpartition(".")
-        if not dot:
-            stem, extension = base_name, ""
-
-        safe_stem = re.sub(r"[^a-zA-Z0-9_-]", "_", stem) or "upload"
-        safe_extension = re.sub(r"[^a-zA-Z0-9]", "", extension)
-        filename = f"{safe_stem}.{safe_extension}" if safe_extension else safe_stem
-        uploads_dir = Path("/app/uploads")
-        uploads_dir.mkdir(parents=True, exist_ok=True)
-
-        async with AsyncSessionLocal() as session:
-            carga = CargaArchivo(filename=filename, status=CargaStatus.PENDING)
-            session.add(carga)
-            await session.commit()
-            await session.refresh(carga)
-
-        stored_path = uploads_dir / f"{carga.id}_{filename}"
-        file.file.seek(0)
-        with stored_path.open("wb") as output_file:
-            output_file.write(file.file.read())
-
-        return carga, stored_path
-
     @strawberry.mutation
     async def subir_archivo(self, file: Upload) -> CargaArchivoNode:
-        carga, stored_path = await self._registrar_carga(file, max_size_bytes=10 * 1024 * 1024)
+        carga, stored_path = await _registrar_carga(file, max_size_bytes=10 * 1024 * 1024)
         task_procesar_archivo.delay(str(carga.id), str(stored_path))
         status = carga.status.value if isinstance(carga.status, CargaStatus) else str(carga.status)
         return CargaArchivoNode(id=strawberry.ID(str(carga.id)), filename=carga.filename, status=status)
 
     @strawberry.mutation
     async def cargar_maestro_invima(self, file: Upload) -> CargaArchivoNode:
-        carga, stored_path = await self._registrar_carga(file)
+        carga, stored_path = await _registrar_carga(file)
         task_procesar_invima.delay(str(carga.id), str(stored_path))
         status = carga.status.value if isinstance(carga.status, CargaStatus) else str(carga.status)
         return CargaArchivoNode(id=strawberry.ID(str(carga.id)), filename=carga.filename, status=status)
