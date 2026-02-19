@@ -22,13 +22,14 @@ export function CargaInvima() {
 
   const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!file) {
+    const selectedFile = file;
+    if (!selectedFile) {
       return;
     }
-    const result = await cargarInvima({ variables: { file } });
+    const result = await cargarInvima({ variables: { file: selectedFile } });
     const payload = result.data?.cargarMaestroInvima;
     if (payload) {
-      setHistorial((prev) => [{ ...payload, filename: payload.filename || file.name }, ...prev].slice(0, MAX_HISTORY_ITEMS));
+      setHistorial((prev) => [{ ...payload, filename: payload.filename || selectedFile.name }, ...prev].slice(0, MAX_HISTORY_ITEMS));
     }
   };
 

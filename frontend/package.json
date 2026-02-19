@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@apollo/client": "^3.13.8",
+    "apollo-upload-client": "^18.0.1",
     "graphql": "^16.11.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0"
@@ -21,6 +22,7 @@
     "@graphql-codegen/cli": "^5.0.7",
     "@graphql-codegen/client-preset": "^4.8.2",
     "@tailwindcss/vite": "^4.2.0",
+    "@types/apollo-upload-client": "^18.0.1",
     "@types/node": "^24.10.1",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
