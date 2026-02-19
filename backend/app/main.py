@@ -13,7 +13,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-app.include_router(GraphQLRouter(schema), prefix="/graphql")
+app.include_router(GraphQLRouter(schema, multipart_uploads_enabled=True), prefix="/graphql")
 
 
 @app.get("/health")
