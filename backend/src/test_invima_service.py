@@ -82,6 +82,25 @@ class InvimaServiceTests(unittest.TestCase):
         self.assertEqual(rows[0]["registro_invima"], "INV-B")
         self.assertEqual(rows[0]["atc"], "A02")
 
+    def test_lee_csv_con_punto_y_coma(self):
+        content = (
+            "EXPEDIENTE;CONSECUTIVO;ATC;REGISTRO INVIMA;NOMBRE COMERCIAL;PRINCIPIO ACTIVO;"
+            "PRESENTACION COMERCIAL;LABORATORIO TITULAR;ESTADO REGISTRO;ESTADO CUM\n"
+            "321;4;Z99;INV-9;MEDICINA;COMPUESTO;TAB;SIN DATO;Vigente;Activo\n"
+        )
+        with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False) as handle:
+            handle.write(content)
+            path = handle.name
+
+        try:
+            rows = leer_maestro_invima(path).to_dicts()
+        finally:
+            os.unlink(path)
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["id_cum"], "321-4")
+        self.assertEqual(rows[0]["laboratorio"], "")
+
     def test_merge_tmp_invima_actualiza_solo_campos_permitidos(self):
         sql = " ".join(MERGE_TMP_INVIMA_SQL.split())
 
