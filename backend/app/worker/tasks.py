@@ -309,16 +309,21 @@ async def _procesar_costos(carga_id: str, file_path: str) -> dict[str, Any]:
             async with session_factory() as session:
                 existing_rows = (
                     await session.exec(
-                        select(Medicamento.id_cum, Medicamento.nombre_limpio).where(
+                        select(Medicamento.id, Medicamento.id_cum, Medicamento.nombre_limpio).where(
                             Medicamento.id_cum.in_(list(incoming_rows))
                         )
                     )
                 ).all()
-                existing_by_id_cum = {id_cum: nombre_limpio for id_cum, nombre_limpio in existing_rows if id_cum}
+                existing_by_id_cum = {
+                    id_cum: {"id": medicamento_id, "nombre_limpio": nombre_limpio}
+                    for medicamento_id, id_cum, nombre_limpio in existing_rows
+                    if id_cum
+                }
                 payload = [
                     {
+                        "id": existing_by_id_cum[id_cum]["id"],
                         **incoming_rows[id_cum],
-                        "nombre_limpio": existing_by_id_cum[id_cum],
+                        "nombre_limpio": existing_by_id_cum[id_cum]["nombre_limpio"],
                     }
                     for id_cum in existing_by_id_cum
                 ]
