@@ -7,12 +7,13 @@ from uuid import UUID
 
 import strawberry
 from strawberry.file_uploads import Upload
+from sqlalchemy import func
 from sqlmodel import select
 
 from app.core.db import AsyncSessionLocal
-from app.models.medicamento import CargaArchivo, CargaStatus
+from app.models.medicamento import CargaArchivo, CargaStatus, Medicamento
 from app.services.search import buscar_medicamentos_hibrido
-from app.worker.tasks import task_procesar_archivo, task_procesar_invima
+from app.worker.tasks import task_procesar_archivo, task_procesar_costos, task_procesar_invima
 
 
 @strawberry.type
@@ -25,6 +26,10 @@ class MedicamentoNode:
     forma_farmaceutica: Optional[str]
     registro_invima: Optional[str]
     principio_activo: Optional[str]
+    precio_unitario: Optional[float]
+    precio_empaque: Optional[float]
+    es_regulado: bool
+    precio_maximo_regulado: Optional[float]
 
 
 @strawberry.type
@@ -46,6 +51,10 @@ async def _buscar_medicamentos(session, texto: str, empresa: Optional[str]) -> l
             forma_farmaceutica=forma_farmaceutica,
             registro_invima=registro_invima,
             principio_activo=principio_activo,
+            precio_unitario=precio_unitario,
+            precio_empaque=precio_empaque,
+            es_regulado=bool(es_regulado),
+            precio_maximo_regulado=precio_maximo_regulado,
         )
         for (
             medicamento_id,
@@ -56,6 +65,10 @@ async def _buscar_medicamentos(session, texto: str, empresa: Optional[str]) -> l
             forma_farmaceutica,
             registro_invima,
             principio_activo,
+            precio_unitario,
+            precio_empaque,
+            es_regulado,
+            precio_maximo_regulado,
             _rank,
         ) in medicamentos
     ]
@@ -86,6 +99,39 @@ class Query:
                 return None
             status = carga.status.value if isinstance(carga.status, CargaStatus) else str(carga.status)
             return CargaArchivoNode(id=strawberry.ID(str(carga.id)), filename=carga.filename, status=status)
+
+    @strawberry.field
+    async def comparativa_precios(self, principio_activo: str) -> list[MedicamentoNode]:
+        normalized = principio_activo.strip().lower()
+        if not normalized:
+            return []
+        async with AsyncSessionLocal() as session:
+            medicamentos = (
+                await session.exec(
+                    select(Medicamento).where(
+                        func.lower(func.coalesce(Medicamento.principio_activo, "")) == normalized,
+                        Medicamento.precio_unitario.is_not(None),
+                        Medicamento.precio_unitario > 0,
+                    ).order_by(Medicamento.precio_unitario.asc(), Medicamento.nombre_limpio.asc())
+                )
+            ).all()
+            return [
+                MedicamentoNode(
+                    id=strawberry.ID(str(medicamento.id)),
+                    nombre_limpio=medicamento.nombre_limpio,
+                    distancia=0.0,
+                    id_cum=medicamento.id_cum,
+                    laboratorio=medicamento.laboratorio,
+                    forma_farmaceutica=medicamento.forma_farmaceutica,
+                    registro_invima=medicamento.registro_invima,
+                    principio_activo=medicamento.principio_activo,
+                    precio_unitario=medicamento.precio_unitario,
+                    precio_empaque=medicamento.precio_empaque,
+                    es_regulado=bool(medicamento.es_regulado),
+                    precio_maximo_regulado=medicamento.precio_maximo_regulado,
+                )
+                for medicamento in medicamentos
+            ]
 
 
 async def _registrar_carga(file: Upload, max_size_bytes: int | None = None) -> tuple[CargaArchivo, Path]:
@@ -139,6 +185,13 @@ class Mutation:
     async def cargar_maestro_invima(self, file: Upload) -> CargaArchivoNode:
         carga, stored_path = await _registrar_carga(file)
         task_procesar_invima.delay(str(carga.id), str(stored_path))
+        status = carga.status.value if isinstance(carga.status, CargaStatus) else str(carga.status)
+        return CargaArchivoNode(id=strawberry.ID(str(carga.id)), filename=carga.filename, status=status)
+
+    @strawberry.mutation
+    async def cargar_archivo_costos(self, file: Upload) -> CargaArchivoNode:
+        carga, stored_path = await _registrar_carga(file)
+        task_procesar_costos.delay(str(carga.id), str(stored_path))
         status = carga.status.value if isinstance(carga.status, CargaStatus) else str(carga.status)
         return CargaArchivoNode(id=strawberry.ID(str(carga.id)), filename=carga.filename, status=status)
 
