@@ -5,7 +5,7 @@ from uuid import uuid4
 
 from sqlalchemy.dialects import postgresql
 
-from app.services.invima_service import construir_upsert_invima, leer_maestro_invima
+from app.services.invima_service import MERGE_TMP_INVIMA_SQL, construir_upsert_invima, leer_maestro_invima
 
 
 class InvimaServiceTests(unittest.TestCase):
@@ -55,8 +55,21 @@ class InvimaServiceTests(unittest.TestCase):
         self.assertIn("atc = excluded.atc", sql)
         self.assertIn("registro_invima = excluded.registro_invima", sql)
         self.assertIn("estado_regulatorio = excluded.estado_regulatorio", sql)
-        self.assertNotIn("nombre_limpio = excluded.nombre_limpio", sql)
+        self.assertIn("nombre_limpio = excluded.nombre_limpio", sql)
+        self.assertIn("laboratorio = excluded.laboratorio", sql)
         self.assertNotIn("embedding_status = excluded.embedding_status", sql)
+
+    def test_merge_tmp_invima_actualiza_solo_campos_permitidos(self):
+        sql = " ".join(MERGE_TMP_INVIMA_SQL.split())
+
+        self.assertIn("ON CONFLICT (id_cum) DO UPDATE SET", sql)
+        self.assertIn("atc = EXCLUDED.atc", sql)
+        self.assertIn("registro_invima = EXCLUDED.registro_invima", sql)
+        self.assertIn("estado_regulatorio = EXCLUDED.estado_regulatorio", sql)
+        self.assertIn("nombre_limpio = EXCLUDED.nombre_limpio", sql)
+        self.assertIn("laboratorio = EXCLUDED.laboratorio", sql)
+        self.assertNotIn("embedding_status = EXCLUDED.embedding_status", sql)
+        self.assertNotIn("embedding = EXCLUDED.embedding", sql)
 
 
 if __name__ == "__main__":
