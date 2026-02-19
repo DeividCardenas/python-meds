@@ -77,6 +77,8 @@ def leer_maestro_invima(file_path: str) -> pl.DataFrame:
         raise FileNotFoundError(f"No existe el archivo maestro INVIMA: {file_path}")
 
     dataframe = None
+    detected_separator = None
+    attempted_columns: list[str] = []
     for separator in ("\t", ";", ","):
         candidate = pl.read_csv(
             file_path,
@@ -85,11 +87,17 @@ def leer_maestro_invima(file_path: str) -> pl.DataFrame:
             ignore_errors=True,
             truncate_ragged_lines=True,
         )
+        attempted_columns = candidate.columns
         if all(column in candidate.columns for column in REQUIRED_INVIMA_COLUMNS):
             dataframe = candidate
+            detected_separator = separator
             break
     if dataframe is None:
-        raise pl.exceptions.ColumnNotFoundError("No se reconocieron las columnas esperadas del archivo maestro INVIMA")
+        raise pl.exceptions.ColumnNotFoundError(
+            "No se reconocieron las columnas esperadas del archivo maestro INVIMA. "
+            f"Esperadas: {', '.join(REQUIRED_INVIMA_COLUMNS)}. Encontradas: {', '.join(attempted_columns)}"
+        )
+    logger.info("INVIMA separador detectado: %r", detected_separator)
 
     dataframe = dataframe.with_columns(
         pl.col("ESTADO REGISTRO").cast(pl.Utf8).fill_null("").str.strip_chars().str.replace_all(r"(?i)^sin dato$", ""),
