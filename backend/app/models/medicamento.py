@@ -6,7 +6,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import JSON, Column, ForeignKey, Numeric, String
+from sqlalchemy import JSON, Column, ForeignKey, Index, Numeric, String, text
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlmodel import Field, SQLModel
 
@@ -22,6 +22,9 @@ class CargaStatus(str, Enum):
 
 class Medicamento(SQLModel, table=True):
     __tablename__ = "medicamentos"
+    __table_args__ = (
+        Index("ix_medicamentos_nombre_gin", text("nombre_limpio gin_trgm_ops"), postgresql_using="gin"),
+    )
 
     id: UUID = Field(
         default_factory=uuid4,
