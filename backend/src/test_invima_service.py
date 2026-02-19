@@ -13,8 +13,11 @@ class InvimaServiceTests(unittest.TestCase):
         content = (
             "EXPEDIENTE\tCONSECUTIVO\tATC\tREGISTRO INVIMA\tNOMBRE COMERCIAL\tPRINCIPIO ACTIVO\t"
             "PRESENTACION COMERCIAL\tLABORATORIO TITULAR\tESTADO REGISTRO\tESTADO CUM\n"
-            "123\t1\tA01\tINV-1\tDOLEX\tACETAMINOFEN\tTABLETAS\tLAB UNO\tVigente\tActivo\n"
+            "123\t1\tA01\tINV-1\tDÓLEX®\tÁCIDO ACETILSALICÍLICO™\tTABLETAS\tLAB UNO\tVigente\tActivo\n"
+            "123\t1\tSIN DATO\tINV-1B\tSIN DATO\tCAFÉINA\tTABLETAS\tSIN DATO\tVIGENTE\tACTIVO\n"
             "999\t2\tB02\tINV-2\tX\tY\tZ\tLAB DOS\tVencido\tActivo\n"
+            "555\t9\tC03\tINV-3\tX\tY\tZ\tLAB TRES\tNo Vigente\tActivo\n"
+            "777\t8\tD04\tINV-4\tX\tY\tZ\tLAB CUATRO\tVigente\tInactivo\n"
         )
         with tempfile.NamedTemporaryFile("w", suffix=".tsv", delete=False) as handle:
             handle.write(content)
@@ -28,11 +31,11 @@ class InvimaServiceTests(unittest.TestCase):
 
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["id_cum"], "123-1")
-        self.assertEqual(rows[0]["atc"], "A01")
-        self.assertEqual(rows[0]["registro_invima"], "INV-1")
-        self.assertEqual(rows[0]["nombre_limpio"], "DOLEX ACETAMINOFEN TABLETAS")
-        self.assertEqual(rows[0]["laboratorio"], "LAB UNO")
-        self.assertEqual(rows[0]["estado_regulatorio"], "Vigente / Activo")
+        self.assertEqual(rows[0]["atc"], "")
+        self.assertEqual(rows[0]["registro_invima"], "INV-1B")
+        self.assertEqual(rows[0]["nombre_limpio"], "cafeina")
+        self.assertEqual(rows[0]["laboratorio"], "")
+        self.assertEqual(rows[0]["estado_regulatorio"], "VIGENTE / ACTIVO")
 
     def test_upsert_actualiza_solo_campos_regulatorios(self):
         statement = construir_upsert_invima(
