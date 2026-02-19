@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import polars as pl
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.sql import text
 from sqlalchemy.sql.dml import Insert
 
 from app.core.db import AsyncSessionLocal
@@ -13,6 +14,45 @@ from app.models.medicamento import Medicamento
 
 INVIMA_BATCH_SIZE = 5000
 EMBEDDING_STATUS_PENDING = "PENDING"
+TMP_INVIMA_COLUMNS = (
+    "id",
+    "id_cum",
+    "nombre_limpio",
+    "atc",
+    "registro_invima",
+    "estado_regulatorio",
+    "laboratorio",
+    "embedding_status",
+)
+CREATE_TMP_INVIMA_SQL = "CREATE TEMP TABLE tmp_invima (LIKE medicamentos EXCLUDING INDEXES) ON COMMIT DROP"
+MERGE_TMP_INVIMA_SQL = """
+INSERT INTO medicamentos (
+    id,
+    id_cum,
+    nombre_limpio,
+    atc,
+    registro_invima,
+    estado_regulatorio,
+    laboratorio,
+    embedding_status
+)
+SELECT
+    id,
+    id_cum,
+    nombre_limpio,
+    atc,
+    registro_invima,
+    estado_regulatorio,
+    laboratorio,
+    embedding_status
+FROM tmp_invima
+ON CONFLICT (id_cum) DO UPDATE SET
+    atc = EXCLUDED.atc,
+    registro_invima = EXCLUDED.registro_invima,
+    estado_regulatorio = EXCLUDED.estado_regulatorio,
+    nombre_limpio = EXCLUDED.nombre_limpio,
+    laboratorio = EXCLUDED.laboratorio
+"""
 
 
 def leer_maestro_invima(file_path: str) -> pl.DataFrame:
@@ -67,6 +107,8 @@ def construir_upsert_invima(rows: list[dict[str, Any]]) -> Insert:
             "atc": statement.excluded.atc,
             "registro_invima": statement.excluded.registro_invima,
             "estado_regulatorio": statement.excluded.estado_regulatorio,
+            "nombre_limpio": statement.excluded.nombre_limpio,
+            "laboratorio": statement.excluded.laboratorio,
         },
     )
 
@@ -78,14 +120,22 @@ async def procesar_maestro_invima(file_path: str) -> dict[str, int]:
 
     total = 0
     async with AsyncSessionLocal() as session:
+        await session.execute(text(CREATE_TMP_INVIMA_SQL))
+        raw_conn = await session.connection()
+        asyncpg_conn = (await raw_conn.get_raw_connection()).driver_connection
         for batch in dataframe.iter_slices(n_rows=INVIMA_BATCH_SIZE):
             rows = batch.with_columns(pl.lit(EMBEDDING_STATUS_PENDING).alias("embedding_status")).to_dicts()
             if not rows:
                 continue
             for row in rows:
                 row["id"] = uuid4()
-            await session.execute(construir_upsert_invima(rows))
+            await asyncpg_conn.copy_records_to_table(
+                "tmp_invima",
+                records=[tuple(row[column] for column in TMP_INVIMA_COLUMNS) for row in rows],
+                columns=TMP_INVIMA_COLUMNS,
+            )
             total += len(rows)
+        await session.execute(text(MERGE_TMP_INVIMA_SQL))
         await session.commit()
 
     return {"total_filas_filtradas": len(dataframe), "upsertados": total}
