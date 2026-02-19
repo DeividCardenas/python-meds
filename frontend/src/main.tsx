@@ -7,7 +7,7 @@ import App from './App.tsx'
 
 const apolloClient = new ApolloClient({
   link: createUploadLink({
-    uri: import.meta.env.VITE_API_URL || 'http://localhost:8000/graphql',
+    uri: import.meta.env.VITE_API_URL ?? 'http://localhost:8000/graphql',
   }),
   cache: new InMemoryCache(),
 })
