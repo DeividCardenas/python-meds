@@ -30,6 +30,17 @@ TMP_INVIMA_COLUMNS = (
     "laboratorio",
     "embedding_status",
 )
+REQUIRED_INVIMA_COLUMNS = (
+    "ESTADO REGISTRO",
+    "ESTADO CUM",
+    "EXPEDIENTE",
+    "CONSECUTIVO",
+    "ATC",
+    "REGISTRO INVIMA",
+    "NOMBRE COMERCIAL",
+    "PRINCIPIO ACTIVO",
+    "LABORATORIO TITULAR",
+)
 CREATE_TMP_INVIMA_SQL = "CREATE TEMP TABLE tmp_invima (LIKE medicamentos EXCLUDING INDEXES) ON COMMIT DROP"
 MERGE_TMP_INVIMA_SQL = """
 INSERT INTO medicamentos (
@@ -65,13 +76,30 @@ def leer_maestro_invima(file_path: str) -> pl.DataFrame:
     if not Path(file_path).exists():
         raise FileNotFoundError(f"No existe el archivo maestro INVIMA: {file_path}")
 
-    dataframe = pl.read_csv(
-        file_path,
-        separator="\t",
-        infer_schema_length=0,
-        ignore_errors=True,
-        truncate_ragged_lines=True,
-    ).with_columns(
+    dataframe = None
+    detected_separator = None
+    attempted_columns: list[str] = []
+    for separator in ("\t", ";", ","):
+        candidate = pl.read_csv(
+            file_path,
+            separator=separator,
+            infer_schema_length=0,
+            ignore_errors=True,
+            truncate_ragged_lines=True,
+        )
+        attempted_columns = candidate.columns
+        if all(column in candidate.columns for column in REQUIRED_INVIMA_COLUMNS):
+            dataframe = candidate
+            detected_separator = separator
+            break
+    if dataframe is None:
+        raise pl.exceptions.ColumnNotFoundError(
+            "No se reconocieron las columnas esperadas del archivo maestro INVIMA. "
+            f"Esperadas: {', '.join(REQUIRED_INVIMA_COLUMNS)}. Encontradas: {', '.join(attempted_columns)}"
+        )
+    logger.info("INVIMA separador detectado: %r", detected_separator)
+
+    dataframe = dataframe.with_columns(
         pl.col("ESTADO REGISTRO").cast(pl.Utf8).fill_null("").str.strip_chars().str.replace_all(r"(?i)^sin dato$", ""),
         pl.col("ESTADO CUM").cast(pl.Utf8).fill_null("").str.strip_chars().str.replace_all(r"(?i)^sin dato$", ""),
         pl.col("EXPEDIENTE").cast(pl.Utf8).fill_null("").str.strip_chars().str.replace_all(r"(?i)^sin dato$", ""),
