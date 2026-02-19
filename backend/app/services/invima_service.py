@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import time
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -14,6 +16,7 @@ from app.models.medicamento import Medicamento
 
 INVIMA_BATCH_SIZE = 5000
 EMBEDDING_STATUS_PENDING = "PENDING"
+logger = logging.getLogger(__name__)
 TMP_INVIMA_COLUMNS = (
     "id",
     "id_cum",
@@ -59,43 +62,54 @@ def leer_maestro_invima(file_path: str) -> pl.DataFrame:
     if not Path(file_path).exists():
         raise FileNotFoundError(f"No existe el archivo maestro INVIMA: {file_path}")
 
-    return (
-        pl.scan_csv(file_path, separator="\t", infer_schema_length=0)
-        .with_columns(
-            pl.col("ESTADO REGISTRO").cast(pl.Utf8).fill_null(""),
-            pl.col("ESTADO CUM").cast(pl.Utf8).fill_null(""),
-            pl.col("EXPEDIENTE").cast(pl.Utf8).fill_null(""),
-            pl.col("CONSECUTIVO").cast(pl.Utf8).fill_null(""),
-            pl.col("ATC").cast(pl.Utf8).fill_null(""),
-            pl.col("REGISTRO INVIMA").cast(pl.Utf8).fill_null(""),
-            pl.col("NOMBRE COMERCIAL").cast(pl.Utf8).fill_null(""),
-            pl.col("PRINCIPIO ACTIVO").cast(pl.Utf8).fill_null(""),
-            pl.col("PRESENTACION COMERCIAL").cast(pl.Utf8).fill_null(""),
-            pl.col("LABORATORIO TITULAR").cast(pl.Utf8).fill_null(""),
-        )
-        .filter(
-            pl.col("ESTADO REGISTRO").str.to_lowercase().str.contains("vigente")
-            & pl.col("ESTADO CUM").str.to_lowercase().str.contains("activo")
-        )
-        .select(
-            id_cum=(pl.col("EXPEDIENTE").str.strip_chars() + "-" + pl.col("CONSECUTIVO").str.strip_chars()),
-            atc=pl.col("ATC").str.strip_chars(),
-            registro_invima=pl.col("REGISTRO INVIMA").str.strip_chars(),
-            estado_regulatorio=(pl.col("ESTADO REGISTRO").str.strip_chars() + " / " + pl.col("ESTADO CUM").str.strip_chars()),
+    dataframe = pl.read_csv(
+        file_path,
+        separator="\t",
+        infer_schema_length=0,
+        ignore_errors=True,
+        truncate_ragged_lines=True,
+    ).with_columns(
+        pl.col("ESTADO REGISTRO").cast(pl.Utf8).fill_null("").str.strip_chars().str.replace_all(r"(?i)^sin dato$", ""),
+        pl.col("ESTADO CUM").cast(pl.Utf8).fill_null("").str.strip_chars().str.replace_all(r"(?i)^sin dato$", ""),
+        pl.col("EXPEDIENTE").cast(pl.Utf8).fill_null("").str.strip_chars().str.replace_all(r"(?i)^sin dato$", ""),
+        pl.col("CONSECUTIVO").cast(pl.Utf8).fill_null("").str.strip_chars().str.replace_all(r"(?i)^sin dato$", ""),
+        pl.col("ATC").cast(pl.Utf8).fill_null("").str.strip_chars().str.replace_all(r"(?i)^sin dato$", ""),
+        pl.col("REGISTRO INVIMA").cast(pl.Utf8).fill_null("").str.strip_chars().str.replace_all(r"(?i)^sin dato$", ""),
+        pl.col("NOMBRE COMERCIAL").cast(pl.Utf8).fill_null("").str.strip_chars().str.replace_all(r"(?i)^sin dato$", ""),
+        pl.col("PRINCIPIO ACTIVO").cast(pl.Utf8).fill_null("").str.strip_chars().str.replace_all(r"(?i)^sin dato$", ""),
+        pl.col("LABORATORIO TITULAR").cast(pl.Utf8).fill_null("").str.strip_chars().str.replace_all(r"(?i)^sin dato$", ""),
+    )
+    logger.info("INVIMA registros leidos: %s", len(dataframe))
+
+    dataframe = dataframe.filter(
+        (pl.col("ESTADO REGISTRO").str.to_lowercase() == "vigente") & (pl.col("ESTADO CUM").str.to_lowercase() == "activo")
+    )
+    logger.info("INVIMA registros tras filtrado vigente/activo: %s", len(dataframe))
+
+    dataframe = (
+        dataframe.select(
+            id_cum=(pl.col("EXPEDIENTE") + "-" + pl.col("CONSECUTIVO")),
+            atc=pl.col("ATC"),
+            registro_invima=pl.col("REGISTRO INVIMA"),
+            estado_regulatorio=(pl.col("ESTADO REGISTRO") + " / " + pl.col("ESTADO CUM")),
             nombre_limpio=pl.concat_str(
-                [
-                    pl.col("NOMBRE COMERCIAL").str.strip_chars(),
-                    pl.col("PRINCIPIO ACTIVO").str.strip_chars(),
-                    pl.col("PRESENTACION COMERCIAL").str.strip_chars(),
-                ],
+                [pl.col("NOMBRE COMERCIAL"), pl.col("PRINCIPIO ACTIVO")],
                 separator=" ",
                 ignore_nulls=True,
-            ).str.replace_all(r"\s+", " ").str.strip_chars(),
-            laboratorio=pl.col("LABORATORIO TITULAR").str.strip_chars(),
+            )
+            .str.replace_all(r"[®™]", " ")
+            .str.replace_all(r"\s+", " ")
+            .str.strip_chars()
+            .str.to_lowercase()
+            .str.normalize("NFD")
+            .str.replace_all(r"\p{M}+", ""),
+            laboratorio=pl.col("LABORATORIO TITULAR"),
         )
         .filter(pl.col("id_cum").str.len_chars() > 1)
-        .collect(engine="streaming")
+        .unique(subset=["id_cum"], keep="last")
     )
+    logger.info("INVIMA registros tras deduplicacion por id_cum: %s", len(dataframe))
+    return dataframe
 
 
 def construir_upsert_invima(rows: list[dict[str, Any]]) -> Insert:
@@ -119,23 +133,26 @@ async def procesar_maestro_invima(file_path: str) -> dict[str, int]:
         return {"total_filas_filtradas": 0, "upsertados": 0}
 
     total = 0
+    insert_started_at = time.perf_counter()
     async with AsyncSessionLocal() as session:
         await session.execute(text(CREATE_TMP_INVIMA_SQL))
         raw_conn = await session.connection()
         asyncpg_conn = (await raw_conn.get_raw_connection()).driver_connection
         for batch in dataframe.iter_slices(n_rows=INVIMA_BATCH_SIZE):
             rows = batch.with_columns(pl.lit(EMBEDDING_STATUS_PENDING).alias("embedding_status")).to_dicts()
-            if not rows:
-                continue
             for row in rows:
                 row["id"] = uuid4()
+            records = [tuple(row[column] for column in TMP_INVIMA_COLUMNS) for row in rows]
+            if not records:
+                continue
             await asyncpg_conn.copy_records_to_table(
                 "tmp_invima",
-                records=[tuple(row[column] for column in TMP_INVIMA_COLUMNS) for row in rows],
+                records=records,
                 columns=TMP_INVIMA_COLUMNS,
             )
-            total += len(rows)
+            total += len(records)
         await session.execute(text(MERGE_TMP_INVIMA_SQL))
         await session.commit()
+    logger.info("INVIMA insercion masiva completada en %.2fs. Registros copiados: %s", time.perf_counter() - insert_started_at, total)
 
     return {"total_filas_filtradas": len(dataframe), "upsertados": total}
