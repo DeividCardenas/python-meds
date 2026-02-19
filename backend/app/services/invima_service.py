@@ -11,6 +11,9 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.sql import text
 from sqlalchemy.sql.dml import Insert
 
+from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlmodel.ext.asyncio.session import AsyncSession
+
 from app.core.db import AsyncSessionLocal
 from app.models.medicamento import Medicamento
 
@@ -127,14 +130,17 @@ def construir_upsert_invima(rows: list[dict[str, Any]]) -> Insert:
     )
 
 
-async def procesar_maestro_invima(file_path: str) -> dict[str, int]:
+async def procesar_maestro_invima(
+    file_path: str,
+    session_factory: async_sessionmaker[AsyncSession] = AsyncSessionLocal,
+) -> dict[str, int]:
     dataframe = leer_maestro_invima(file_path)
     if dataframe.is_empty():
         return {"total_filas_filtradas": 0, "upsertados": 0}
 
     total = 0
     insert_started_at = time.perf_counter()
-    async with AsyncSessionLocal() as session:
+    async with session_factory() as session:
         await session.execute(text(CREATE_TMP_INVIMA_SQL))
         raw_conn = await session.connection()
         asyncpg_conn = (await raw_conn.get_raw_connection()).driver_connection

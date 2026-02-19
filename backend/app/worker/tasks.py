@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
@@ -11,7 +12,7 @@ from celery import Celery
 from sqlalchemy import insert
 from sqlmodel import select
 
-from app.core.db import AsyncSessionLocal
+from app.core.db import create_task_session_factory
 from app.models.medicamento import CargaArchivo, CargaStatus, Medicamento, PrecioReferencia
 from app.services.invima_service import procesar_maestro_invima
 
@@ -79,11 +80,12 @@ def _read_dataframe(file_path: str) -> pl.DataFrame:
 
 
 async def _actualizar_estado(
+    session_factory: Any,
     carga_uuid: UUID,
     status: CargaStatus,
     errores_log: dict[str, Any] | None = None,
 ) -> None:
-    async with AsyncSessionLocal() as session:
+    async with session_factory() as session:
         carga = await session.get(CargaArchivo, carga_uuid)
         if carga is None:
             return
@@ -95,7 +97,8 @@ async def _actualizar_estado(
 
 async def _procesar_archivo(carga_id: str, file_path: str) -> dict[str, Any]:
     carga_uuid = UUID(carga_id)
-    await _actualizar_estado(carga_uuid, CargaStatus.PROCESSING)
+    task_engine, session_factory = create_task_session_factory()
+    await _actualizar_estado(session_factory, carga_uuid, CargaStatus.PROCESSING)
 
     try:
         if not Path(file_path).exists():
@@ -165,7 +168,7 @@ async def _procesar_archivo(carga_id: str, file_path: str) -> dict[str, Any]:
                 for item in valid_rows
             ]
 
-            async with AsyncSessionLocal() as session:
+            async with session_factory() as session:
                 existing_medicamentos = (
                     await session.exec(
                         select(Medicamento.id, Medicamento.nombre_limpio).where(
@@ -202,44 +205,128 @@ async def _procesar_archivo(carga_id: str, file_path: str) -> dict[str, Any]:
         if report_path:
             errores_log["reporte_rechazos"] = report_path
 
-        await _actualizar_estado(carga_uuid, CargaStatus.COMPLETED, errores_log=errores_log)
+        await _actualizar_estado(session_factory, carga_uuid, CargaStatus.COMPLETED, errores_log=errores_log)
         return {"carga_id": carga_id, "status": CargaStatus.COMPLETED.value, **errores_log}
     except Exception as exc:  # noqa: BLE001
         logger.exception("Error procesando carga %s desde archivo %s", carga_id, file_path)
         await _actualizar_estado(
+            session_factory,
             carga_uuid,
             CargaStatus.FAILED,
-            errores_log={"error": str(exc)},
+            errores_log={"error": f"{type(exc).__name__}: {exc}"},
         )
         raise
+    finally:
+        await task_engine.dispose()
 
 
 async def _procesar_invima(carga_id: str, file_path: str) -> dict[str, Any]:
     carga_uuid = UUID(carga_id)
-    await _actualizar_estado(carga_uuid, CargaStatus.PROCESSING)
+    task_engine, session_factory = create_task_session_factory()
+    await _actualizar_estado(session_factory, carga_uuid, CargaStatus.PROCESSING)
 
     try:
         if not Path(file_path).exists():
             raise FileNotFoundError(f"No existe el archivo maestro INVIMA: {file_path}")
 
-        errores_log = await procesar_maestro_invima(file_path)
-        await _actualizar_estado(carga_uuid, CargaStatus.COMPLETED, errores_log=errores_log)
+        errores_log = await procesar_maestro_invima(file_path, session_factory=session_factory)
+        await _actualizar_estado(session_factory, carga_uuid, CargaStatus.COMPLETED, errores_log=errores_log)
         return {"carga_id": carga_id, "status": CargaStatus.COMPLETED.value, **errores_log}
     except Exception as exc:  # noqa: BLE001
         logger.exception("Error procesando maestro INVIMA %s desde archivo %s", carga_id, file_path)
         await _actualizar_estado(
+            session_factory,
             carga_uuid,
             CargaStatus.FAILED,
-            errores_log={"error": str(exc)},
+            errores_log={"error": f"{type(exc).__name__}: {exc}"},
         )
         raise
+    finally:
+        await task_engine.dispose()
+
+
+def _cleanup_temp_file(file_path: str) -> None:
+    path = Path(file_path)
+    if path.suffix.lower() == ".tsv" and path.exists():
+        path.unlink()
+
+
+def _run_async_safely(coro: Any) -> Any:
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        loop_thread_id = getattr(loop, "_thread_id", None)
+        if loop_thread_id is not None and loop_thread_id != threading.get_ident():
+            return asyncio.run_coroutine_threadsafe(coro, loop).result()
+        result: dict[str, Any] = {}
+        error: dict[str, Exception] = {}
+
+        def _run_in_thread() -> None:
+            local_loop = asyncio.new_event_loop()
+            try:
+                result["value"] = local_loop.run_until_complete(coro)
+            except Exception as exc:  # noqa: BLE001
+                error["value"] = exc
+            finally:
+                local_loop.close()
+
+        thread = threading.Thread(target=_run_in_thread, daemon=True)
+        thread.start()
+        thread.join()
+        if "value" in error:
+            raise error["value"]
+        return result.get("value")
+
+    new_loop = asyncio.new_event_loop()
+    try:
+        asyncio.set_event_loop(new_loop)
+        return new_loop.run_until_complete(coro)
+    finally:
+        new_loop.close()
+        asyncio.set_event_loop(None)
+
+
+def _mark_failed(carga_id: str, exc: Exception) -> None:
+    try:
+        carga_uuid = UUID(carga_id)
+    except ValueError:
+        return
+    task_engine, session_factory = create_task_session_factory()
+    try:
+        _run_async_safely(
+            _actualizar_estado(
+                session_factory,
+                carga_uuid,
+                CargaStatus.FAILED,
+                errores_log={"error": f"{type(exc).__name__}: {exc}"},
+            )
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("No se pudo actualizar estado FAILED para carga %s", carga_id)
+    finally:
+        _run_async_safely(task_engine.dispose())
 
 
 @celery_app.task(name="task_procesar_archivo")
 def task_procesar_archivo(carga_id: str, file_path: str) -> dict[str, Any]:
-    return asyncio.run(_procesar_archivo(carga_id, file_path))
+    try:
+        return _run_async_safely(_procesar_archivo(carga_id, file_path))
+    except Exception as exc:  # noqa: BLE001
+        _mark_failed(carga_id, exc)
+        raise
+    finally:
+        _cleanup_temp_file(file_path)
 
 
 @celery_app.task(name="task_procesar_invima")
 def task_procesar_invima(carga_id: str, file_path: str) -> dict[str, Any]:
-    return asyncio.run(_procesar_invima(carga_id, file_path))
+    try:
+        return _run_async_safely(_procesar_invima(carga_id, file_path))
+    except Exception as exc:  # noqa: BLE001
+        _mark_failed(carga_id, exc)
+        raise
+    finally:
+        _cleanup_temp_file(file_path)
