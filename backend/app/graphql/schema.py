@@ -20,6 +20,8 @@ class MedicamentoNode:
     id: strawberry.ID
     nombre_limpio: str
     distancia: float
+    id_cum: Optional[str]
+    laboratorio: Optional[str]
 
 
 @strawberry.type
@@ -32,7 +34,13 @@ class CargaArchivoNode:
 async def _buscar_medicamentos(session, texto: str, empresa: Optional[str]) -> list[MedicamentoNode]:
     medicamentos = await buscar_medicamentos_hibrido(session, texto=texto, empresa=empresa)
     return [
-        MedicamentoNode(id=strawberry.ID(str(item[0])), nombre_limpio=item[1], distancia=float(item[2]))
+        MedicamentoNode(
+            id=strawberry.ID(str(item[0])),
+            nombre_limpio=item[1],
+            distancia=float(item[2]),
+            id_cum=item[3],
+            laboratorio=item[4],
+        )
         for item in medicamentos
     ]
 

@@ -1,13 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { useLazyQuery } from "@apollo/client";
 
-import {
-  SearchMedicamentosDocument,
-  type SearchMedicamentosQuery,
-  type SearchMedicamentosQueryVariables,
-} from "../graphql/generated";
-
-const ACTIVE_DISTANCE_THRESHOLD = 0.2;
+import { SearchMedicamentosDocument, type SearchMedicamentosQuery, type SearchMedicamentosQueryVariables } from "../graphql/generated";
 
 export function BuscadorMedicamentos() {
   const [texto, setTexto] = useState("");
@@ -30,14 +24,11 @@ export function BuscadorMedicamentos() {
     });
   };
 
-  const getBadgeStatus = (distancia: number) =>
-    distancia <= ACTIVE_DISTANCE_THRESHOLD ? "ACTIVO" : "INACTIVO/VENCIDO";
-
   return (
-    <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
-      <div className="mb-6">
-        <h2 className="text-xl font-semibold">Buscador de Medicamentos</h2>
-        <p className="mt-1 text-sm text-slate-600">Consulta coincidencias por nombre y filtra por laboratorio.</p>
+    <section className="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
+      <div className="mb-8">
+        <h2 className="text-2xl font-semibold text-slate-900">Buscador de Medicamentos</h2>
+        <p className="mt-2 text-sm text-slate-500">Consulta coincidencias por nombre y filtra por laboratorio.</p>
       </div>
 
       <form onSubmit={onSubmit} className="grid gap-4 lg:grid-cols-[2fr_1fr_auto]">
@@ -72,53 +63,52 @@ export function BuscadorMedicamentos() {
 
       {error ? <p className="mt-4 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">Error: {error.message}</p> : null}
 
-      <div className="mt-6 overflow-hidden rounded-xl border border-slate-200">
-        <div className="max-h-[420px] overflow-auto">
-          <table className="min-w-full border-separate border-spacing-0 text-sm">
-            <thead className="sticky top-0 z-10 bg-slate-100 text-left text-slate-600">
-              <tr>
-                <th className="border-b border-slate-200 px-4 py-3 font-semibold">Medicamento</th>
-                <th className="border-b border-slate-200 px-4 py-3 font-semibold">Distancia</th>
-                <th className="border-b border-slate-200 px-4 py-3 font-semibold">Estado INVIMA</th>
-                <th className="border-b border-slate-200 px-4 py-3 text-right font-semibold">Precio</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(data?.buscarMedicamentos ?? []).map((item) => {
-                const precio =
-                  "precio" in item && typeof item.precio === "number" ? item.precio : null;
-                const status = getBadgeStatus(item.distancia);
-                return (
-                  <tr key={item.id} className="bg-white transition hover:bg-slate-50">
-                    <td className="border-b border-slate-100 px-4 py-3 text-slate-800">{item.nombreLimpio}</td>
-                    <td className="border-b border-slate-100 px-4 py-3 text-slate-600">{item.distancia.toFixed(4)}</td>
-                    <td className="border-b border-slate-100 px-4 py-3">
-                      <span
-                        className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
-                          status === "ACTIVO" ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"
-                        }`}
-                      >
-                        {status}
-                      </span>
-                    </td>
-                    <td className="border-b border-slate-100 px-4 py-3 text-right font-mono text-slate-700">
-                      {typeof precio === "number"
-                        ? precio.toLocaleString("es-CO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })
-                        : "N/D"}
-                    </td>
-                  </tr>
-                );
-              })}
-              {!loading && (data?.buscarMedicamentos ?? []).length === 0 ? (
-                <tr>
-                  <td colSpan={4} className="px-4 py-8 text-center text-sm text-slate-500">
-                    No hay resultados para mostrar.
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </div>
+      <div className="mt-8">
+        {loading ? (
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {Array.from({ length: 6 }).map((_, index) => (
+              <article key={index} className="animate-pulse rounded-2xl border border-slate-200 bg-slate-100 p-5">
+                <div className="h-6 w-2/3 rounded bg-slate-200" />
+                <div className="mt-3 h-4 w-3/4 rounded bg-slate-200" />
+                <div className="mt-4 h-6 w-28 rounded-md bg-slate-200" />
+                <div className="mt-6 h-4 w-1/2 rounded bg-slate-200" />
+              </article>
+            ))}
+          </div>
+        ) : null}
+
+        {!loading && (data?.buscarMedicamentos ?? []).length > 0 ? (
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+            {(data?.buscarMedicamentos ?? []).map((item) => (
+              <article
+                key={item.id}
+                className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition duration-200 hover:scale-105 hover:shadow-lg"
+              >
+                <h3 className="text-lg font-bold text-slate-900">{item.nombreLimpio}</h3>
+                <p className="mt-2 text-sm text-slate-500">
+                  Principio activo: <span className="font-medium text-slate-600">{item.nombreLimpio}</span>
+                </p>
+                <p className="mt-4 inline-flex rounded-md border border-slate-300 bg-slate-100 px-2.5 py-1 font-mono text-xs text-slate-700">
+                  {item.idCum ?? "ID CUM N/D"}
+                </p>
+                <p className="mt-5 flex items-center gap-2 text-sm text-slate-600">
+                  <svg viewBox="0 0 24 24" className="h-4 w-4 fill-none stroke-current stroke-2" aria-hidden="true">
+                    <path d="M3 21h18" />
+                    <path d="M5 21V9l7-4 7 4v12" />
+                    <path d="M9 21v-4h6v4" />
+                  </svg>
+                  {item.laboratorio ?? "Laboratorio no disponible"}
+                </p>
+              </article>
+            ))}
+          </div>
+        ) : null}
+
+        {!loading && (data?.buscarMedicamentos ?? []).length === 0 ? (
+          <p className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+            No hay resultados para mostrar.
+          </p>
+        ) : null}
       </div>
     </section>
   );

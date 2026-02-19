@@ -10,6 +10,8 @@ export type SearchMedicamentosQuery = {
     id: string;
     nombreLimpio: string;
     distancia: number;
+    idCum?: string | null;
+    laboratorio?: string | null;
   }>;
 };
 
@@ -31,6 +33,8 @@ export const SearchMedicamentosDocument = gql`
       id
       nombreLimpio
       distancia
+      idCum
+      laboratorio
     }
   }
 ` as TypedDocumentNode<SearchMedicamentosQuery, SearchMedicamentosQueryVariables>;
