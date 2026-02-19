@@ -22,6 +22,9 @@ class MedicamentoNode:
     distancia: float
     id_cum: Optional[str]
     laboratorio: Optional[str]
+    forma_farmaceutica: Optional[str]
+    registro_invima: Optional[str]
+    principio_activo: Optional[str]
 
 
 @strawberry.type
@@ -40,8 +43,21 @@ async def _buscar_medicamentos(session, texto: str, empresa: Optional[str]) -> l
             distancia=float(distancia),
             id_cum=id_cum,
             laboratorio=laboratorio,
+            forma_farmaceutica=forma_farmaceutica,
+            registro_invima=registro_invima,
+            principio_activo=principio_activo,
         )
-        for medicamento_id, nombre_limpio, distancia, id_cum, laboratorio, _rank in medicamentos
+        for (
+            medicamento_id,
+            nombre_limpio,
+            distancia,
+            id_cum,
+            laboratorio,
+            forma_farmaceutica,
+            registro_invima,
+            principio_activo,
+            _rank,
+        ) in medicamentos
     ]
 
 

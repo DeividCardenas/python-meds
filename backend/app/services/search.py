@@ -103,6 +103,9 @@ def _construir_statement_hibrido(
             distancia_expr,
             Medicamento.id_cum,
             Medicamento.laboratorio,
+            Medicamento.forma_farmaceutica,
+            Medicamento.registro_invima,
+            Medicamento.principio_activo,
             rank_expr,
         )
         .where(tsvector_expr.op("@@")(tsquery_expr))

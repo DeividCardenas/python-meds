@@ -25,6 +25,9 @@ class SearchServiceTests(unittest.TestCase):
         self.assertIn("to_tsvector", sql)
         self.assertIn("plainto_tsquery", sql)
         self.assertIn("<=>", sql)
+        self.assertIn("forma_farmaceutica", sql)
+        self.assertIn("registro_invima", sql)
+        self.assertIn("principio_activo", sql)
         self.assertIn("query_embedding", params)
 
 

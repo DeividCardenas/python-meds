@@ -11,12 +11,12 @@ from app.services.invima_service import MERGE_TMP_INVIMA_SQL, construir_upsert_i
 class InvimaServiceTests(unittest.TestCase):
     def test_lee_tsv_filtra_vigentes_activos_y_mapea_columnas(self):
         content = (
-            "EXPEDIENTE\tCONSECUTIVO\tATC\tREGISTRO INVIMA\tNOMBRE COMERCIAL\tPRINCIPIO ACTIVO\t"
+            "EXPEDIENTE\tCONSECUTIVO\tATC\tREGISTRO INVIMA\tNOMBRE COMERCIAL\tPRINCIPIO ACTIVO\tFORMA FARMACEUTICA\t"
             "PRESENTACION COMERCIAL\tLABORATORIO TITULAR\tESTADO REGISTRO\tESTADO CUM\n"
-            "123\t1\tA01\tINV-1\tDÓLEX®\tÁCIDO ACETILSALICÍLICO™\tTABLETAS\tSIN DATO\tVigente\tActivo\n"
-            "999\t2\tB02\tINV-2\tX\tY\tZ\tLAB DOS\tVencido\tActivo\n"
-            "555\t9\tC03\tINV-3\tX\tY\tZ\tLAB TRES\tNo Vigente\tActivo\n"
-            "777\t8\tD04\tINV-4\tX\tY\tZ\tLAB CUATRO\tVigente\tInactivo\n"
+            "123\t1\tA01\tINV-1\tDÓLEX®\tÁCIDO ACETILSALICÍLICO™\tSIN DATO\tTABLETAS\tSIN DATO\tVigente\tActivo\n"
+            "999\t2\tB02\tINV-2\tX\tY\tZ\tZ\tLAB DOS\tVencido\tActivo\n"
+            "555\t9\tC03\tINV-3\tX\tY\tZ\tZ\tLAB TRES\tNo Vigente\tActivo\n"
+            "777\t8\tD04\tINV-4\tX\tY\tZ\tZ\tLAB CUATRO\tVigente\tInactivo\n"
         )
         with tempfile.NamedTemporaryFile("w", suffix=".tsv", delete=False) as handle:
             handle.write(content)
@@ -34,6 +34,8 @@ class InvimaServiceTests(unittest.TestCase):
         self.assertEqual(rows[0]["registro_invima"], "INV-1")
         self.assertEqual(rows[0]["nombre_limpio"], "dolex acido acetilsalicilico")
         self.assertEqual(rows[0]["laboratorio"], "")
+        self.assertEqual(rows[0]["principio_activo"], "ÁCIDO ACETILSALICÍLICO™")
+        self.assertEqual(rows[0]["forma_farmaceutica"], "")
         self.assertEqual(rows[0]["estado_regulatorio"], "Vigente / Activo")
 
     def test_upsert_actualiza_solo_campos_regulatorios(self):
@@ -47,6 +49,8 @@ class InvimaServiceTests(unittest.TestCase):
                     "estado_regulatorio": "Vigente / Activo",
                     "nombre_limpio": "DOLEX ACETAMINOFEN TABLETAS",
                     "laboratorio": "LAB UNO",
+                    "principio_activo": "ACETAMINOFEN",
+                    "forma_farmaceutica": "TABLETAS",
                     "embedding_status": "PENDING",
                 }
             ]
@@ -59,14 +63,16 @@ class InvimaServiceTests(unittest.TestCase):
         self.assertIn("estado_regulatorio = excluded.estado_regulatorio", sql)
         self.assertIn("nombre_limpio = excluded.nombre_limpio", sql)
         self.assertIn("laboratorio = excluded.laboratorio", sql)
+        self.assertIn("principio_activo = excluded.principio_activo", sql)
+        self.assertIn("forma_farmaceutica = excluded.forma_farmaceutica", sql)
         self.assertNotIn("embedding_status = excluded.embedding_status", sql)
 
     def test_deduplicacion_invima_conserva_ultimo_id_cum(self):
         content = (
-            "EXPEDIENTE\tCONSECUTIVO\tATC\tREGISTRO INVIMA\tNOMBRE COMERCIAL\tPRINCIPIO ACTIVO\t"
+            "EXPEDIENTE\tCONSECUTIVO\tATC\tREGISTRO INVIMA\tNOMBRE COMERCIAL\tPRINCIPIO ACTIVO\tFORMA FARMACEUTICA\t"
             "PRESENTACION COMERCIAL\tLABORATORIO TITULAR\tESTADO REGISTRO\tESTADO CUM\n"
-            "456\t7\tA01\tINV-A\tNOMBRE\tACTIVO\tTAB\tLAB 1\tVigente\tActivo\n"
-            "456\t7\tA02\tINV-B\tNOMBRE\tACTIVO\tTAB\tLAB 2\tVigente\tActivo\n"
+            "456\t7\tA01\tINV-A\tNOMBRE\tACTIVO\tJARABE\tTAB\tLAB 1\tVigente\tActivo\n"
+            "456\t7\tA02\tINV-B\tNOMBRE\tACTIVO\tTABLETA\tTAB\tLAB 2\tVigente\tActivo\n"
         )
         with tempfile.NamedTemporaryFile("w", suffix=".tsv", delete=False) as handle:
             handle.write(content)
@@ -81,12 +87,14 @@ class InvimaServiceTests(unittest.TestCase):
         self.assertEqual(rows[0]["id_cum"], "456-7")
         self.assertEqual(rows[0]["registro_invima"], "INV-B")
         self.assertEqual(rows[0]["atc"], "A02")
+        self.assertEqual(rows[0]["principio_activo"], "ACTIVO")
+        self.assertEqual(rows[0]["forma_farmaceutica"], "TABLETA")
 
     def test_lee_csv_con_punto_y_coma(self):
         content = (
-            "EXPEDIENTE;CONSECUTIVO;ATC;REGISTRO INVIMA;NOMBRE COMERCIAL;PRINCIPIO ACTIVO;"
+            "EXPEDIENTE;CONSECUTIVO;ATC;REGISTRO INVIMA;NOMBRE COMERCIAL;PRINCIPIO ACTIVO;FORMA FARMACEUTICA;"
             "PRESENTACION COMERCIAL;LABORATORIO TITULAR;ESTADO REGISTRO;ESTADO CUM\n"
-            "321;4;Z99;INV-9;MEDICINA;COMPUESTO;TAB;SIN DATO;Vigente;Activo\n"
+            "321;4;Z99;INV-9;MEDICINA;COMPUESTO;SIN DATO;TAB;SIN DATO;Vigente;Activo\n"
         )
         with tempfile.NamedTemporaryFile("w", suffix=".csv", delete=False) as handle:
             handle.write(content)
@@ -110,6 +118,8 @@ class InvimaServiceTests(unittest.TestCase):
         self.assertIn("estado_regulatorio = EXCLUDED.estado_regulatorio", sql)
         self.assertIn("nombre_limpio = EXCLUDED.nombre_limpio", sql)
         self.assertIn("laboratorio = EXCLUDED.laboratorio", sql)
+        self.assertIn("principio_activo = EXCLUDED.principio_activo", sql)
+        self.assertIn("forma_farmaceutica = EXCLUDED.forma_farmaceutica", sql)
         self.assertNotIn("embedding_status = EXCLUDED.embedding_status", sql)
         self.assertNotIn("embedding = EXCLUDED.embedding", sql)
 
