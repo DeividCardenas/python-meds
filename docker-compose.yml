@@ -41,7 +41,7 @@ services:
 
   worker:
     build: ./backend
-    command: sh -c "alembic upgrade head && celery -A app.worker.tasks.celery_app worker --loglevel=info"
+    command: sh -c "celery -A app.worker.tasks.celery_app worker --loglevel=info"
     environment:
       DB_URL: ${DB_URL:-postgresql+asyncpg://admin:securepassword@db:5432/meds_vectors}
       CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
