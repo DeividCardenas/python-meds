@@ -6,7 +6,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import JSON, Column, ForeignKey, Index, Numeric, String, text
+from sqlalchemy import JSON, Boolean, Column, Float, ForeignKey, Index, Numeric, String, text
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlmodel import Field, SQLModel
 
@@ -38,6 +38,10 @@ class Medicamento(SQLModel, table=True):
     laboratorio: str | None = Field(default=None, sa_column=Column(String, nullable=True))
     principio_activo: str | None = Field(default=None, sa_column=Column(String, nullable=True))
     forma_farmaceutica: str | None = Field(default=None, sa_column=Column(String, nullable=True))
+    precio_unitario: float | None = Field(default=None, sa_column=Column(Float, nullable=True))
+    precio_empaque: float | None = Field(default=None, sa_column=Column(Float, nullable=True))
+    es_regulado: bool = Field(default=False, sa_column=Column(Boolean, nullable=False, default=False))
+    precio_maximo_regulado: float | None = Field(default=None, sa_column=Column(Float, nullable=True))
     embedding_status: str | None = Field(default=None, sa_column=Column(String, nullable=True))
     embedding: list[float] | None = Field(default=None, sa_column=Column(Vector(EMBEDDING_DIMENSION), nullable=True))
 

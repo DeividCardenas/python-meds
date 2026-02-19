@@ -106,6 +106,10 @@ def _construir_statement_hibrido(
             Medicamento.forma_farmaceutica,
             Medicamento.registro_invima,
             Medicamento.principio_activo,
+            Medicamento.precio_unitario,
+            Medicamento.precio_empaque,
+            Medicamento.es_regulado,
+            Medicamento.precio_maximo_regulado,
             rank_expr,
         )
         .where(tsvector_expr.op("@@")(tsquery_expr))

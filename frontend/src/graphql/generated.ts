@@ -15,6 +15,29 @@ export type SearchMedicamentosQuery = {
     formaFarmaceutica?: string | null;
     registroInvima?: string | null;
     principioActivo?: string | null;
+    precioUnitario?: number | null;
+    precioEmpaque?: number | null;
+    esRegulado: boolean;
+    precioMaximoRegulado?: number | null;
+  }>;
+};
+
+export type ComparativaPreciosQueryVariables = {
+  principioActivo: string;
+};
+
+export type ComparativaPreciosQuery = {
+  comparativaPrecios: Array<{
+    id: string;
+    nombreLimpio: string;
+    idCum?: string | null;
+    laboratorio?: string | null;
+    formaFarmaceutica?: string | null;
+    principioActivo?: string | null;
+    precioUnitario?: number | null;
+    precioEmpaque?: number | null;
+    esRegulado: boolean;
+    precioMaximoRegulado?: number | null;
   }>;
 };
 
@@ -41,9 +64,30 @@ export const SearchMedicamentosDocument = gql`
       formaFarmaceutica
       registroInvima
       principioActivo
+      precioUnitario
+      precioEmpaque
+      esRegulado
+      precioMaximoRegulado
     }
   }
 ` as TypedDocumentNode<SearchMedicamentosQuery, SearchMedicamentosQueryVariables>;
+
+export const ComparativaPreciosDocument = gql`
+  query ComparativaPrecios($principioActivo: String!) {
+    comparativaPrecios(principioActivo: $principioActivo) {
+      id
+      nombreLimpio
+      idCum
+      laboratorio
+      formaFarmaceutica
+      principioActivo
+      precioUnitario
+      precioEmpaque
+      esRegulado
+      precioMaximoRegulado
+    }
+  }
+` as TypedDocumentNode<ComparativaPreciosQuery, ComparativaPreciosQueryVariables>;
 
 export const CargarInvimaDocument = gql`
   mutation CargarInvima($file: Upload!) {

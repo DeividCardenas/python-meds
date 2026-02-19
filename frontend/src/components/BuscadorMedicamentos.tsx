@@ -1,7 +1,14 @@
 import { useState, type FormEvent } from "react";
 import { useLazyQuery } from "@apollo/client";
 
-import { SearchMedicamentosDocument, type SearchMedicamentosQuery, type SearchMedicamentosQueryVariables } from "../graphql/generated";
+import {
+  ComparativaPreciosDocument,
+  SearchMedicamentosDocument,
+  type ComparativaPreciosQuery,
+  type ComparativaPreciosQueryVariables,
+  type SearchMedicamentosQuery,
+  type SearchMedicamentosQueryVariables,
+} from "../graphql/generated";
 
 const toTitleCase = (value: string | null | undefined) =>
   (value ?? "")
@@ -10,16 +17,26 @@ const toTitleCase = (value: string | null | undefined) =>
     .trim();
 
 const escapeCsvCell = (value: string) => `"${value.replace(/"/g, '""')}"`;
+const formatPrice = (value: number | null | undefined) =>
+  typeof value === "number" && Number.isFinite(value)
+    ? new Intl.NumberFormat("es-CO", { style: "currency", currency: "COP", maximumFractionDigits: 2 }).format(value)
+    : "";
 
 export function BuscadorMedicamentos() {
   const [texto, setTexto] = useState("");
   const [empresa, setEmpresa] = useState("");
   const [showCopiedToast, setShowCopiedToast] = useState(false);
+  const [modalPrincipioActivo, setModalPrincipioActivo] = useState<string | null>(null);
   const [buscar, { data, loading, error }] = useLazyQuery<
     SearchMedicamentosQuery,
     SearchMedicamentosQueryVariables
   >(SearchMedicamentosDocument);
+  const [buscarComparativa, { data: comparativaData, loading: loadingComparativa, error: comparativaError }] = useLazyQuery<
+    ComparativaPreciosQuery,
+    ComparativaPreciosQueryVariables
+  >(ComparativaPreciosDocument);
   const resultados = data?.buscarMedicamentos ?? [];
+  const comparativaResultados = comparativaData?.comparativaPrecios ?? [];
   const exportRows = resultados.map((item) => ({
     cum: item.idCum ?? "",
     nombre: toTitleCase(item.nombreLimpio),
@@ -27,6 +44,10 @@ export function BuscadorMedicamentos() {
     formaFarmaceutica: toTitleCase(item.formaFarmaceutica),
     laboratorio: toTitleCase(item.laboratorio),
     registroInvima: item.registroInvima ?? "",
+    precioUnitario: formatPrice(item.precioUnitario),
+    precioEmpaque: formatPrice(item.precioEmpaque),
+    esRegulado: item.esRegulado ? "SI" : "NO",
+    precioMaximoRegulado: formatPrice(item.precioMaximoRegulado),
   }));
 
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
@@ -42,13 +63,44 @@ export function BuscadorMedicamentos() {
     });
   };
 
+  const abrirComparativa = (principioActivo: string | null | undefined) => {
+    const normalized = (principioActivo ?? "").trim();
+    if (!normalized) {
+      return;
+    }
+    setModalPrincipioActivo(normalized);
+    buscarComparativa({ variables: { principioActivo: normalized } });
+  };
+
   const onDescargarCsv = () => {
     if (exportRows.length === 0) {
       return;
     }
-    const headers = ["CUM", "Nombre", "Principio Activo", "Forma Farmacéutica", "Laboratorio", "Registro INVIMA"];
+    const headers = [
+      "CUM",
+      "Nombre",
+      "Principio Activo",
+      "Forma Farmacéutica",
+      "Laboratorio",
+      "Registro INVIMA",
+      "Precio Unitario",
+      "Precio Empaque",
+      "Es Regulado",
+      "Precio Máximo",
+    ];
     const body = exportRows.map((row) =>
-      [row.cum, row.nombre, row.principioActivo, row.formaFarmaceutica, row.laboratorio, row.registroInvima]
+      [
+        row.cum,
+        row.nombre,
+        row.principioActivo,
+        row.formaFarmaceutica,
+        row.laboratorio,
+        row.registroInvima,
+        row.precioUnitario,
+        row.precioEmpaque,
+        row.esRegulado,
+        row.precioMaximoRegulado,
+      ]
         .map(escapeCsvCell)
         .join(","),
     );
@@ -66,9 +118,33 @@ export function BuscadorMedicamentos() {
     if (exportRows.length === 0 || !navigator.clipboard) {
       return;
     }
-    const headers = ["CUM", "Nombre", "Principio Activo", "Forma Farmacéutica", "Laboratorio", "Registro INVIMA"].join("\t");
+    const headers = [
+      "CUM",
+      "Nombre",
+      "Principio Activo",
+      "Forma Farmacéutica",
+      "Laboratorio",
+      "Registro INVIMA",
+      "Precio Unitario",
+      "Precio Empaque",
+      "Es Regulado",
+      "Precio Máximo",
+    ].join("\t");
     const body = exportRows
-      .map((row) => [row.cum, row.nombre, row.principioActivo, row.formaFarmaceutica, row.laboratorio, row.registroInvima].join("\t"))
+      .map((row) =>
+        [
+          row.cum,
+          row.nombre,
+          row.principioActivo,
+          row.formaFarmaceutica,
+          row.laboratorio,
+          row.registroInvima,
+          row.precioUnitario,
+          row.precioEmpaque,
+          row.esRegulado,
+          row.precioMaximoRegulado,
+        ].join("\t"),
+      )
       .join("\n");
     await navigator.clipboard.writeText(`${headers}\n${body}`);
     setShowCopiedToast(true);
@@ -169,6 +245,11 @@ export function BuscadorMedicamentos() {
                   key={item.id}
                   className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition duration-200 hover:scale-105 hover:shadow-lg"
                 >
+                  {item.esRegulado && item.precioMaximoRegulado ? (
+                    <p className="mb-3 inline-flex rounded-full bg-orange-100 px-2.5 py-1 text-xs font-semibold text-orange-700">
+                      Regulado · Máx {formatPrice(item.precioMaximoRegulado)}
+                    </p>
+                  ) : null}
                   <h3 className="text-lg font-bold text-slate-900">{nombreComercial}</h3>
                   {mostrarPrincipioActivo ? (
                     <p className="mt-2 text-sm text-slate-500">
@@ -189,6 +270,14 @@ export function BuscadorMedicamentos() {
                     </svg>
                     {item.laboratorio ?? "Laboratorio no disponible"}
                   </p>
+                  <button
+                    type="button"
+                    onClick={() => abrirComparativa(item.principioActivo)}
+                    disabled={!item.principioActivo}
+                    className="mt-4 rounded-lg border border-blue-200 px-3 py-1.5 text-xs font-semibold text-blue-700 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    Ver comparativa
+                  </button>
                 </article>
               );
             })}
@@ -204,6 +293,63 @@ export function BuscadorMedicamentos() {
 
       {showCopiedToast ? (
         <div className="fixed bottom-4 right-4 rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow-lg">¡Copiado!</div>
+      ) : null}
+      {modalPrincipioActivo ? (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/40 p-4">
+          <div className="w-full max-w-4xl rounded-xl bg-white p-5 shadow-xl">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-lg font-semibold text-slate-900">Comparativa de precios · {toTitleCase(modalPrincipioActivo)}</h3>
+              <button
+                type="button"
+                onClick={() => setModalPrincipioActivo(null)}
+                className="rounded-md border border-slate-300 px-3 py-1 text-sm text-slate-600 hover:bg-slate-50"
+              >
+                Cerrar
+              </button>
+            </div>
+            {comparativaError ? <p className="mb-3 rounded bg-red-50 px-3 py-2 text-sm text-red-700">{comparativaError.message}</p> : null}
+            <div className="max-h-[60vh] overflow-auto rounded-lg border border-slate-200">
+              <table className="min-w-full text-left text-sm">
+                <thead className="bg-slate-50 text-slate-600">
+                  <tr>
+                    <th className="px-3 py-2">Medicamento</th>
+                    <th className="px-3 py-2">Laboratorio</th>
+                    <th className="px-3 py-2">Precio Unitario</th>
+                    <th className="px-3 py-2">Precio Empaque</th>
+                    <th className="px-3 py-2">Regulado</th>
+                    <th className="px-3 py-2">Precio Máximo</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {loadingComparativa ? (
+                    <tr>
+                      <td colSpan={6} className="px-3 py-5 text-center text-slate-500">
+                        Cargando comparativa...
+                      </td>
+                    </tr>
+                  ) : comparativaResultados.length > 0 ? (
+                    comparativaResultados.map((item) => (
+                      <tr key={item.id} className="border-t border-slate-100">
+                        <td className="px-3 py-2">{toTitleCase(item.nombreLimpio)}</td>
+                        <td className="px-3 py-2">{toTitleCase(item.laboratorio) || "-"}</td>
+                        <td className="px-3 py-2">{formatPrice(item.precioUnitario) || "-"}</td>
+                        <td className="px-3 py-2">{formatPrice(item.precioEmpaque) || "-"}</td>
+                        <td className="px-3 py-2">{item.esRegulado ? "SI" : "NO"}</td>
+                        <td className="px-3 py-2">{formatPrice(item.precioMaximoRegulado) || "-"}</td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan={6} className="px-3 py-5 text-center text-slate-500">
+                        No hay registros con precio para este principio activo.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
       ) : null}
     </section>
   );

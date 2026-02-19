@@ -16,6 +16,13 @@ class MedicamentoModelTests(unittest.TestCase):
         self.assertIn("USING gin", sql)
         self.assertIn("nombre_limpio gin_trgm_ops", sql)
 
+    def test_costos_y_regulacion_fields_exist(self):
+        columns = Medicamento.__table__.columns
+        self.assertIn("precio_unitario", columns)
+        self.assertIn("precio_empaque", columns)
+        self.assertIn("es_regulado", columns)
+        self.assertIn("precio_maximo_regulado", columns)
+
 
 if __name__ == "__main__":
     unittest.main()

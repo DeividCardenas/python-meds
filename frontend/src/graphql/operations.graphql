@@ -8,6 +8,25 @@ query SearchMedicamentos($texto: String!, $empresa: String) {
     formaFarmaceutica
     registroInvima
     principioActivo
+    precioUnitario
+    precioEmpaque
+    esRegulado
+    precioMaximoRegulado
+  }
+}
+
+query ComparativaPrecios($principioActivo: String!) {
+  comparativaPrecios(principioActivo: $principioActivo) {
+    id
+    nombreLimpio
+    idCum
+    laboratorio
+    formaFarmaceutica
+    principioActivo
+    precioUnitario
+    precioEmpaque
+    esRegulado
+    precioMaximoRegulado
   }
 }
 
