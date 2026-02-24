@@ -24,6 +24,7 @@ class Medicamento(SQLModel, table=True):
     __tablename__ = "medicamentos"
     __table_args__ = (
         Index("ix_medicamentos_nombre_gin", text("nombre_limpio gin_trgm_ops"), postgresql_using="gin"),
+        Index("ix_medicamentos_principio_activo", text("lower(coalesce(principio_activo, ''))"), postgresql_using="btree"),
     )
 
     id: UUID = Field(

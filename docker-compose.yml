@@ -65,5 +65,17 @@ services:
     depends_on:
       - backend
 
+  k6:
+    image: grafana/k6:latest
+    profiles:
+      - perf
+    volumes:
+      - ./k6:/scripts
+    environment:
+      GRAPHQL_URL: ${GRAPHQL_URL:-http://backend:8000/graphql}
+    command: run /scripts/script.js
+    depends_on:
+      - backend
+
 volumes:
   postgres_data:
