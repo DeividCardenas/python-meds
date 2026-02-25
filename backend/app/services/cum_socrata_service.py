@@ -14,9 +14,10 @@ from typing import Any
 import aiohttp
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import async_sessionmaker
+from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.models.medicamento import MedicamentoCUM
+from app.models.medicamento import CUMSyncLog, MedicamentoCUM
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,9 @@ SOCRATA_ENDPOINTS: dict[str, str] = {
     "en_tramite": "https://www.datos.gov.co/resource/vgr4-gemg.json",
     "vencidos": "https://www.datos.gov.co/resource/qj5z-zabx.json",
 }
+
+# Plantilla de la URL de metadatos de Socrata (SODA discovery API)
+SOCRATA_METADATA_URL = "https://www.datos.gov.co/api/views/{dataset_id}.json"
 
 # Tamaño del lote para paginación SoQL – evita desbordamiento de memoria
 CUM_BATCH_SIZE = int(os.getenv("CUM_BATCH_SIZE", "5000"))
@@ -141,6 +145,70 @@ def construir_upsert_cum(rows: list[dict[str, Any]]):
 
 
 # ---------------------------------------------------------------------------
+# Smart Sync – detección de cambios en Socrata antes de la descarga masiva
+# ---------------------------------------------------------------------------
+
+
+def _extract_dataset_id(url: str) -> str:
+    """Extrae el identificador 4x4 del dataset desde una URL de recurso Socrata.
+
+    Ejemplo: "https://www.datos.gov.co/resource/i7cb-raxc.json" → "i7cb-raxc"
+    """
+    return url.rstrip("/").split("/")[-1].removesuffix(".json")
+
+
+async def _fetch_rows_updated_at(
+    session: aiohttp.ClientSession,
+    dataset_id: str,
+) -> datetime | None:
+    """Consulta los metadatos del dataset Socrata y retorna rowsUpdatedAt en UTC.
+
+    El campo rowsUpdatedAt es un entero Unix (segundos desde epoch).
+    Retorna None si la consulta falla o el campo no está disponible.
+    """
+    metadata_url = SOCRATA_METADATA_URL.format(dataset_id=dataset_id)
+    try:
+        async with session.get(metadata_url) as response:
+            response.raise_for_status()
+            metadata: dict[str, Any] = await response.json(content_type=None)
+        rows_updated_at = metadata.get("rowsUpdatedAt")
+        if rows_updated_at is not None:
+            return datetime.fromtimestamp(int(rows_updated_at), tz=timezone.utc)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("No se pudo obtener metadatos del dataset %s: %s", dataset_id, exc)
+    return None
+
+
+async def _get_sync_log(
+    session_factory: async_sessionmaker[AsyncSession],
+    fuente: str,
+) -> CUMSyncLog | None:
+    """Recupera el registro de sincronización de la base de datos para *fuente*."""
+    async with session_factory() as db_session:
+        result = await db_session.exec(
+            select(CUMSyncLog).where(CUMSyncLog.fuente == fuente)
+        )
+        return result.first()
+
+
+async def _update_sync_log(
+    session_factory: async_sessionmaker[AsyncSession],
+    fuente: str,
+    rows_updated_at: datetime | None,
+) -> None:
+    """Actualiza (o crea) el registro de sincronización para *fuente*."""
+    now = datetime.now(tz=timezone.utc)
+    async with session_factory() as db_session:
+        log = await db_session.get(CUMSyncLog, fuente)
+        if log is None:
+            log = CUMSyncLog(fuente=fuente)
+            db_session.add(log)
+        log.rows_updated_at = rows_updated_at
+        log.ultima_sincronizacion = now
+        await db_session.commit()
+
+
+# ---------------------------------------------------------------------------
 # Descarga paginada de un único endpoint
 # ---------------------------------------------------------------------------
 
@@ -222,6 +290,11 @@ async def sincronizar_catalogos_cum(
     Descarga y sincroniza los tres catálogos CUM (Vigentes, En Trámite y
     Vencidos) desde la API Socrata de datos.gov.co.
 
+    Smart Sync: antes de iniciar la descarga paginada de cada dataset, consulta
+    el campo rowsUpdatedAt de los metadatos de Socrata y lo compara con el
+    último valor almacenado en cum_sync_log.  Si no hay cambios, omite la
+    extracción y registra "No changes detected".
+
     - Inyecta el App Token en la cabecera X-App-Token.
     - Pagina con $limit / $offset para no saturar la memoria.
     - Aplica upsert por lote para mantener los registros actualizados.
@@ -236,8 +309,26 @@ async def sincronizar_catalogos_cum(
     async with aiohttp.ClientSession(headers=headers) as http_session:
         for fuente, url in SOCRATA_ENDPOINTS.items():
             logger.info("Iniciando sincronización CUM [%s]: %s", fuente, url)
+
+            # --- Smart Sync: verificar si el dataset cambió ---
+            dataset_id = _extract_dataset_id(url)
+            remote_updated_at = await _fetch_rows_updated_at(http_session, dataset_id)
+
+            if remote_updated_at is not None:
+                sync_log = await _get_sync_log(session_factory, fuente)
+                stored_updated_at = sync_log.rows_updated_at if sync_log else None
+                if stored_updated_at is not None and remote_updated_at <= stored_updated_at:
+                    logger.info(
+                        "CUM [%s] No changes detected (rowsUpdatedAt=%s). Skipping extraction.",
+                        fuente,
+                        remote_updated_at.isoformat(),
+                    )
+                    resultados[fuente] = {"status": "skipped", "reason": "No changes detected"}
+                    continue
+
             try:
                 total = await _fetch_endpoint(http_session, url, fuente, session_factory)
+                await _update_sync_log(session_factory, fuente, remote_updated_at)
                 resultados[fuente] = {"status": "ok", "registros": total}
                 logger.info("CUM [%s] completado. Total registros: %s", fuente, total)
             except Exception as exc:  # noqa: BLE001

@@ -1,11 +1,12 @@
 import unittest
-from datetime import datetime
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from sqlalchemy.dialects import postgresql
 
-from app.models.medicamento import MedicamentoCUM
+from app.models.medicamento import CUMSyncLog, MedicamentoCUM
 from app.services.cum_socrata_service import (
+    _extract_dataset_id,
     _map_record,
     _parse_datetime,
     _parse_float,
@@ -138,6 +139,99 @@ class CumSocrataServiceTests(unittest.TestCase):
         # Campos que deben actualizarse en caso de conflicto
         for field in ("estadocum", "principioactivo", "producto", "atc"):
             self.assertIn(field, sql)
+
+
+class SmartSyncTests(unittest.TestCase):
+    def test_extract_dataset_id_from_resource_url(self):
+        from app.services.cum_socrata_service import SOCRATA_ENDPOINTS
+
+        self.assertEqual(_extract_dataset_id(SOCRATA_ENDPOINTS["vigentes"]), "i7cb-raxc")
+        self.assertEqual(_extract_dataset_id(SOCRATA_ENDPOINTS["en_tramite"]), "vgr4-gemg")
+        self.assertEqual(_extract_dataset_id(SOCRATA_ENDPOINTS["vencidos"]), "qj5z-zabx")
+
+    def test_extract_dataset_id_trailing_slash(self):
+        self.assertEqual(_extract_dataset_id("https://example.com/resource/abc1-2345.json/"), "abc1-2345")
+
+    def test_cum_sync_log_model_fields(self):
+        cols = CUMSyncLog.__table__.columns
+        self.assertIn("fuente", cols)
+        self.assertIn("rows_updated_at", cols)
+        self.assertIn("ultima_sincronizacion", cols)
+
+    def test_cum_sync_log_primary_key(self):
+        pk_cols = [col.name for col in CUMSyncLog.__table__.primary_key.columns]
+        self.assertEqual(pk_cols, ["fuente"])
+
+    def test_cum_sync_log_tablename(self):
+        self.assertEqual(CUMSyncLog.__tablename__, "cum_sync_log")
+
+    def test_sincronizar_skips_when_no_changes(self):
+        """When rowsUpdatedAt has not changed, extraction must be skipped."""
+        import asyncio
+
+        from app.services.cum_socrata_service import sincronizar_catalogos_cum
+
+        stored_ts = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        sync_log = CUMSyncLog(fuente="vigentes", rows_updated_at=stored_ts)
+
+        # remote returns same timestamp → no changes
+        remote_ts = stored_ts
+
+        async def _run():
+            with patch(
+                "app.services.cum_socrata_service._fetch_rows_updated_at",
+                new=AsyncMock(return_value=remote_ts),
+            ), patch(
+                "app.services.cum_socrata_service._get_sync_log",
+                new=AsyncMock(return_value=sync_log),
+            ), patch(
+                "app.services.cum_socrata_service._fetch_endpoint",
+                new=AsyncMock(return_value=0),
+            ) as mock_fetch, patch(
+                "app.services.cum_socrata_service._update_sync_log",
+                new=AsyncMock(),
+            ):
+                session_factory = MagicMock()
+                result = await sincronizar_catalogos_cum(session_factory)
+                # _fetch_endpoint must NOT have been called for "vigentes"
+                for call_args in mock_fetch.call_args_list:
+                    self.assertNotIn("i7cb-raxc", str(call_args))
+                return result
+
+        result = asyncio.run(_run())
+        self.assertEqual(result["vigentes"]["status"], "skipped")
+        self.assertEqual(result["vigentes"]["reason"], "No changes detected")
+
+    def test_sincronizar_proceeds_when_dataset_updated(self):
+        """When rowsUpdatedAt is newer, extraction must proceed."""
+        import asyncio
+
+        from app.services.cum_socrata_service import sincronizar_catalogos_cum
+
+        stored_ts = datetime(2026, 1, 1, tzinfo=timezone.utc)
+        newer_ts = datetime(2026, 2, 1, tzinfo=timezone.utc)
+        sync_log = CUMSyncLog(fuente="vigentes", rows_updated_at=stored_ts)
+
+        async def _run():
+            with patch(
+                "app.services.cum_socrata_service._fetch_rows_updated_at",
+                new=AsyncMock(return_value=newer_ts),
+            ), patch(
+                "app.services.cum_socrata_service._get_sync_log",
+                new=AsyncMock(return_value=sync_log),
+            ), patch(
+                "app.services.cum_socrata_service._fetch_endpoint",
+                new=AsyncMock(return_value=42),
+            ), patch(
+                "app.services.cum_socrata_service._update_sync_log",
+                new=AsyncMock(),
+            ):
+                session_factory = MagicMock()
+                return await sincronizar_catalogos_cum(session_factory)
+
+        result = asyncio.run(_run())
+        self.assertEqual(result["vigentes"]["status"], "ok")
+        self.assertEqual(result["vigentes"]["registros"], 42)
 
 
 class CeleryBeatConfigTests(unittest.TestCase):

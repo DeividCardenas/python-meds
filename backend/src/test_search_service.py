@@ -28,10 +28,10 @@ class SearchServiceTests(unittest.TestCase):
         self.assertIn("forma_farmaceutica", sql)
         self.assertIn("registro_invima", sql)
         self.assertIn("principio_activo", sql)
-        self.assertIn("precio_unitario", sql)
-        self.assertIn("precio_empaque", sql)
-        self.assertIn("es_regulado", sql)
-        self.assertIn("precio_maximo_regulado", sql)
+        self.assertNotIn("precio_unitario", sql)
+        self.assertNotIn("precio_empaque", sql)
+        self.assertNotIn("es_regulado", sql)
+        self.assertNotIn("precio_maximo_regulado", sql)
         self.assertIn("query_embedding", params)
 
 
