@@ -33,6 +33,7 @@ services:
       CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
       CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
       OPENAI_KEY: ${OPENAI_KEY:-}
+      SOCRATA_APP_TOKEN: ${SOCRATA_APP_TOKEN:-}
       PYTHONPATH: /app
     volumes:
       - ./backend:/app
@@ -54,6 +55,7 @@ services:
       CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
       CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
       OPENAI_KEY: ${OPENAI_KEY:-}
+      SOCRATA_APP_TOKEN: ${SOCRATA_APP_TOKEN:-}
       PYTHONPATH: /app
     volumes:
       - ./backend:/app
