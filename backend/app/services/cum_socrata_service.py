@@ -125,6 +125,85 @@ def _map_record(raw: dict[str, Any]) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
+# Smart Deduplication – resolver duplicados de id_cum dentro de un lote
+# ---------------------------------------------------------------------------
+
+# Estados considerados "activos/vigentes" (mayor prioridad)
+_ACTIVE_STATES: frozenset[str] = frozenset({"vigente", "activo"})
+
+
+def _status_priority(row: dict[str, Any]) -> int:
+    """Retorna 0 para estados activos/vigentes, 1 para cualquier otro estado.
+
+    Un valor menor indica mayor prioridad en la deduplicación.
+    """
+    estado = (row.get("estadocum") or "").lower().strip()
+    return 0 if estado in _ACTIVE_STATES else 1
+
+
+def _deduplicate_chunk(chunk: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Elimina duplicados de id_cum dentro de un lote usando reglas de negocio.
+
+    Prioridades (en orden):
+    1. Estado: 'vigente'/'activo' gana sobre 'vencido'/'inactivo'/'en tramite'.
+    2. Fecha de vencimiento: la más reciente gana.  Se maneja de forma segura
+       cualquier combinación de datetimes con/sin zona horaria.
+    3. Desempate: se conserva la última fila procesada (mayor índice en el lote).
+
+    Returns:
+        Lista sin duplicados, con un único registro por id_cum.
+    """
+    best: dict[str, dict[str, Any]] = {}
+
+    for row in chunk:
+        key = row.get("id_cum")
+        if key is None:
+            continue
+
+        if key not in best:
+            best[key] = row
+            continue
+
+        current = best[key]
+
+        # --- Regla 1: prioridad por estado ---
+        current_priority = _status_priority(current)
+        new_priority = _status_priority(row)
+
+        if new_priority < current_priority:
+            best[key] = row
+            continue
+        if new_priority > current_priority:
+            # El registro actual ya es mejor; conservarlo
+            continue
+
+        # --- Regla 2: prioridad por fecha de vencimiento más reciente ---
+        current_date: datetime | None = current.get("fechavencimiento")
+        new_date: datetime | None = row.get("fechavencimiento")
+
+        if new_date is not None:
+            if current_date is None:
+                best[key] = row
+                continue
+            # _parse_datetime siempre asigna UTC; normalizar fechas naive como
+            # UTC para garantizar comparaciones seguras entre ambos tipos.
+            current_ts = current_date.replace(tzinfo=timezone.utc) if current_date.tzinfo is None else current_date
+            new_ts = new_date.replace(tzinfo=timezone.utc) if new_date.tzinfo is None else new_date
+            if new_ts > current_ts:
+                best[key] = row
+                continue
+            if new_ts < current_ts:
+                # El registro actual tiene fecha más reciente; conservarlo
+                continue
+            # new_ts == current_ts → desempate por regla 3
+
+        # --- Regla 3: desempate – conservar la última fila procesada ---
+        best[key] = row
+
+    return list(best.values())
+
+
+# ---------------------------------------------------------------------------
 # Construcción del UPSERT
 # ---------------------------------------------------------------------------
 
@@ -244,6 +323,10 @@ async def _fetch_endpoint(
 
         # Mapear y filtrar registros inválidos (sin expediente/consecutivocum)
         rows = [mapped for raw in batch_raw if (mapped := _map_record(raw))]
+
+        # Deduplicar dentro del lote antes del upsert para evitar
+        # CardinalityViolationError por id_cum duplicados en el mismo chunk
+        rows = _deduplicate_chunk(rows)
 
         if rows:
             try:

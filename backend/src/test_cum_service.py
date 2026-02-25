@@ -6,6 +6,7 @@ from sqlalchemy.dialects import postgresql
 
 from app.models.medicamento import CUMSyncLog, MedicamentoCUM
 from app.services.cum_socrata_service import (
+    _deduplicate_chunk,
     _extract_dataset_id,
     _map_record,
     _parse_datetime,
@@ -139,6 +140,150 @@ class CumSocrataServiceTests(unittest.TestCase):
         # Campos que deben actualizarse en caso de conflicto
         for field in ("estadocum", "principioactivo", "producto", "atc"):
             self.assertIn(field, sql)
+
+
+class DeduplicateChunkTests(unittest.TestCase):
+    """Tests for _deduplicate_chunk smart deduplication logic."""
+
+    def _make_row(self, id_cum, estadocum=None, fechavencimiento=None):
+        return {
+            "id_cum": id_cum,
+            "expediente": 1,
+            "consecutivocum": 1,
+            "producto": "TEST",
+            "titular": None,
+            "registrosanitario": None,
+            "fechavencimiento": fechavencimiento,
+            "cantidadcum": None,
+            "descripcioncomercial": None,
+            "estadocum": estadocum,
+            "atc": None,
+            "descripcionatc": None,
+            "principioactivo": None,
+        }
+
+    def test_no_duplicates_returns_all_rows(self):
+        rows = [
+            self._make_row("1-01", "Vigente"),
+            self._make_row("2-01", "Vencido"),
+        ]
+        result = _deduplicate_chunk(rows)
+        self.assertEqual(len(result), 2)
+
+    def test_status_priority_vigente_wins_over_vencido(self):
+        rows = [
+            self._make_row("1-01", "Vencido"),
+            self._make_row("1-01", "Vigente"),
+        ]
+        result = _deduplicate_chunk(rows)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["estadocum"], "Vigente")
+
+    def test_status_priority_activo_wins_over_inactivo(self):
+        rows = [
+            self._make_row("1-01", "Inactivo"),
+            self._make_row("1-01", "Activo"),
+        ]
+        result = _deduplicate_chunk(rows)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["estadocum"], "Activo")
+
+    def test_status_priority_vigente_case_insensitive(self):
+        rows = [
+            self._make_row("1-01", "VENCIDO"),
+            self._make_row("1-01", "VIGENTE"),
+        ]
+        result = _deduplicate_chunk(rows)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["estadocum"], "VIGENTE")
+
+    def test_status_priority_vigente_not_replaced_by_vencido(self):
+        rows = [
+            self._make_row("1-01", "vigente"),
+            self._make_row("1-01", "vencido"),
+        ]
+        result = _deduplicate_chunk(rows)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["estadocum"], "vigente")
+
+    def test_date_priority_more_recent_wins(self):
+        older = datetime(2024, 1, 1, tzinfo=timezone.utc)
+        newer = datetime(2025, 6, 1, tzinfo=timezone.utc)
+        rows = [
+            self._make_row("1-01", "Vencido", older),
+            self._make_row("1-01", "Vencido", newer),
+        ]
+        result = _deduplicate_chunk(rows)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["fechavencimiento"], newer)
+
+    def test_date_priority_none_date_loses_to_real_date(self):
+        newer = datetime(2025, 6, 1, tzinfo=timezone.utc)
+        rows = [
+            self._make_row("1-01", "Vencido", None),
+            self._make_row("1-01", "Vencido", newer),
+        ]
+        result = _deduplicate_chunk(rows)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["fechavencimiento"], newer)
+
+    def test_date_priority_older_date_does_not_replace_newer(self):
+        """A later-parsed row with an older date must NOT replace a row with a newer date."""
+        older = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        newer = datetime(2025, 6, 1, tzinfo=timezone.utc)
+        rows = [
+            self._make_row("1-01", "Vencido", newer),
+            self._make_row("1-01", "Vencido", older),
+        ]
+        result = _deduplicate_chunk(rows)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["fechavencimiento"], newer)
+
+    def test_fallback_keeps_latest_row(self):
+        dt = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        row1 = self._make_row("1-01", "Vencido", dt)
+        row1["producto"] = "FIRST"
+        row2 = self._make_row("1-01", "Vencido", dt)
+        row2["producto"] = "LAST"
+        result = _deduplicate_chunk([row1, row2])
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["producto"], "LAST")
+
+    def test_status_priority_over_date(self):
+        """A vigente row with older date must beat a vencido row with newer date."""
+        older = datetime(2020, 1, 1, tzinfo=timezone.utc)
+        newer = datetime(2030, 1, 1, tzinfo=timezone.utc)
+        rows = [
+            self._make_row("1-01", "vencido", newer),
+            self._make_row("1-01", "vigente", older),
+        ]
+        result = _deduplicate_chunk(rows)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["estadocum"], "vigente")
+
+    def test_timezone_naive_datetime_handled_safely(self):
+        naive_dt = datetime(2025, 1, 1)  # no tzinfo
+        aware_dt = datetime(2025, 6, 1, tzinfo=timezone.utc)
+        rows = [
+            self._make_row("1-01", "Vencido", naive_dt),
+            self._make_row("1-01", "Vencido", aware_dt),
+        ]
+        result = _deduplicate_chunk(rows)
+        self.assertEqual(len(result), 1)
+        # aware_dt is newer → should win
+        self.assertEqual(result[0]["fechavencimiento"], aware_dt)
+
+    def test_empty_chunk_returns_empty(self):
+        self.assertEqual(_deduplicate_chunk([]), [])
+
+    def test_en_tramite_status_is_low_priority(self):
+        rows = [
+            self._make_row("1-01", "En tramite"),
+            self._make_row("1-01", "vigente"),
+        ]
+        result = _deduplicate_chunk(rows)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["estadocum"], "vigente")
 
 
 class SmartSyncTests(unittest.TestCase):
