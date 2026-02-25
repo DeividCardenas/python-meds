@@ -24,7 +24,7 @@ class CargaStatus(str, Enum):
 class Medicamento(SQLModel, table=True):
     __tablename__ = "medicamentos"
     __table_args__ = (
-        Index("ix_medicamentos_nombre_gin", text("nombre_limpio gin_trgm_ops"), postgresql_using="gin"),
+        Index("ix_medicamentos_nombre_gin", "nombre_limpio", postgresql_using="gin", postgresql_ops={"nombre_limpio": "gin_trgm_ops"}),
         Index("ix_medicamentos_principio_activo", text("lower(coalesce(principio_activo, ''))"), postgresql_using="btree"),
     )
 
