@@ -9,12 +9,14 @@ from uuid import UUID, uuid4
 import polars as pl
 
 from celery import Celery
+from celery.schedules import crontab
 from sqlalchemy import insert
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import select
 
 from app.core.db import create_task_session_factory
 from app.models.medicamento import CargaArchivo, CargaStatus, Medicamento, PrecioReferencia
+from app.services.cum_socrata_service import sincronizar_catalogos_cum
 from app.services.invima_service import procesar_maestro_invima
 
 
@@ -23,6 +25,18 @@ celery_app = Celery(
     broker=os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0"),
     backend=os.getenv("CELERY_RESULT_BACKEND", "redis://redis:6379/1"),
 )
+
+# ---------------------------------------------------------------------------
+# Celery Beat – programación de tareas periódicas
+# El catálogo CUM se sincroniza el día 1 de cada mes a las 2:00 AM.
+# ---------------------------------------------------------------------------
+celery_app.conf.beat_schedule = {
+    "sincronizar-catalogos-cum-mensual": {
+        "task": "task_sincronizar_cum",
+        "schedule": crontab(minute=0, hour=2, day_of_month=1),
+    },
+}
+celery_app.conf.timezone = "America/Bogota"
 logger = logging.getLogger(__name__)
 
 
@@ -455,3 +469,31 @@ def task_procesar_costos(carga_id: str, file_path: str) -> dict[str, Any]:
         raise
     finally:
         _cleanup_temp_file(file_path)
+
+
+async def _sincronizar_cum() -> dict[str, Any]:
+    """
+    Corrutina que descarga y sincroniza los catálogos CUM desde la API Socrata.
+    Crea su propio engine/session para no interferir con el engine principal.
+    """
+    task_engine, session_factory = create_task_session_factory()
+    try:
+        return await sincronizar_catalogos_cum(session_factory)
+    finally:
+        await task_engine.dispose()
+
+
+@celery_app.task(name="task_sincronizar_cum")
+def task_sincronizar_cum() -> dict[str, Any]:
+    """
+    Tarea Celery que sincroniza mensualmente los catálogos CUM de INVIMA
+    (Vigentes, En Trámite y Vencidos) desde la API Socrata de datos.gov.co.
+
+    Programada para ejecutarse el día 1 de cada mes a las 2:00 AM (América/Bogotá)
+    mediante Celery Beat (ver beat_schedule en la configuración del worker).
+    """
+    try:
+        return _run_async_safely(_sincronizar_cum())
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Error en sincronización mensual de catálogos CUM: %s", exc)
+        raise
