@@ -6,7 +6,8 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-admin}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-securepassword}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      # Cambiado a 5433 a la izquierda para evitar el choque con el puerto de tu PC
+      - "${POSTGRES_PORT:-5433}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -14,11 +15,15 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - meds-network
 
   redis:
     image: redis:7-alpine
     ports:
       - "${REDIS_PORT:-6379}:6379"
+    networks:
+      - meds-network
 
   backend:
     build: ./backend
@@ -38,6 +43,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+    networks:
+      - meds-network
 
   worker:
     build: ./backend
@@ -55,6 +62,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+    networks:
+      - meds-network
 
   frontend:
     build: ./frontend
@@ -64,18 +73,53 @@ services:
       - "${FRONTEND_PORT:-3000}:80"
     depends_on:
       - backend
+    networks:
+      - meds-network
+
+  influxdb:
+    image: influxdb:1.8
+    profiles:
+      - perf
+    ports:
+      - "8086:8086"
+    environment:
+      - INFLUXDB_DB=k6
+    networks:
+      - meds-network
+
+  grafana:
+    image: grafana/grafana:latest
+    profiles:
+      - perf
+    ports:
+      - "3001:3000"
+    environment:
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_BASIC_ENABLED=false
+    depends_on:
+      - influxdb
+    networks:
+      - meds-network
 
   k6:
     image: grafana/k6:latest
     profiles:
       - perf
     volumes:
-      - ./k6:/scripts
+      - ./k6:/k6
     environment:
       GRAPHQL_URL: ${GRAPHQL_URL:-http://backend:8000/graphql}
-    command: run /scripts/script.js
+    command: run --out influxdb=http://influxdb:8086/k6 /k6/script.js
     depends_on:
       - backend
+      - influxdb
+    networks:
+      - meds-network
+
+networks:
+  meds-network:
+    driver: bridge
 
 volumes:
   postgres_data:
