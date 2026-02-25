@@ -34,6 +34,7 @@ services:
       CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
       OPENAI_KEY: ${OPENAI_KEY:-}
       SOCRATA_APP_TOKEN: ${SOCRATA_APP_TOKEN:-}
+      CUM_BATCH_SIZE: ${CUM_BATCH_SIZE:-5000}
       PYTHONPATH: /app
     volumes:
       - ./backend:/app
@@ -56,6 +57,7 @@ services:
       CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
       OPENAI_KEY: ${OPENAI_KEY:-}
       SOCRATA_APP_TOKEN: ${SOCRATA_APP_TOKEN:-}
+      CUM_BATCH_SIZE: ${CUM_BATCH_SIZE:-5000}
       PYTHONPATH: /app
     volumes:
       - ./backend:/app
