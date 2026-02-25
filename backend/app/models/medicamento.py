@@ -1,12 +1,13 @@
 from __future__ import annotations
 
+from datetime import datetime
 from decimal import Decimal
 from enum import Enum
 from typing import Any
 from uuid import UUID, uuid4
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import JSON, Boolean, Column, Float, ForeignKey, Index, Numeric, String, text
+from sqlalchemy import JSON, Boolean, Column, DateTime, Float, ForeignKey, Index, Integer, Numeric, String, text
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlmodel import Field, SQLModel
 
@@ -73,3 +74,32 @@ class CargaArchivo(SQLModel, table=True):
     filename: str = Field(sa_column=Column(String, nullable=False))
     status: CargaStatus = Field(default=CargaStatus.PENDING, sa_column=Column(String, nullable=False))
     errores_log: dict[str, Any] | None = Field(default=None, sa_column=Column(JSON, nullable=True))
+
+
+class MedicamentoCUM(SQLModel, table=True):
+    """
+    Tabla que almacena los registros del Código Único de Medicamentos (CUM)
+    descargados desde los catálogos INVIMA via la API Socrata de datos.gov.co.
+
+    La clave primaria id_cum es la concatenación estricta de expediente y
+    consecutivocum (ej. "123456-01"), lo que garantiza unicidad por CUM.
+    """
+
+    __tablename__ = "medicamentos_cum"
+
+    # PK: concatenación de expediente + "-" + consecutivocum
+    id_cum: str = Field(sa_column=Column(String, primary_key=True))
+
+    # Campos atómicos provenientes de la API Socrata
+    expediente: int | None = Field(default=None, sa_column=Column(Integer, nullable=True))
+    consecutivocum: int | None = Field(default=None, sa_column=Column(Integer, nullable=True))
+    producto: str | None = Field(default=None, sa_column=Column(String, nullable=True))
+    titular: str | None = Field(default=None, sa_column=Column(String, nullable=True))
+    registrosanitario: str | None = Field(default=None, sa_column=Column(String, nullable=True))
+    fechavencimiento: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
+    cantidadcum: float | None = Field(default=None, sa_column=Column(Float, nullable=True))
+    descripcioncomercial: str | None = Field(default=None, sa_column=Column(String, nullable=True))
+    estadocum: str | None = Field(default=None, sa_column=Column(String, nullable=True, index=True))
+    atc: str | None = Field(default=None, sa_column=Column(String, nullable=True))
+    descripcionatc: str | None = Field(default=None, sa_column=Column(String, nullable=True))
+    principioactivo: str | None = Field(default=None, sa_column=Column(String, nullable=True))
