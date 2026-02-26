@@ -31,9 +31,10 @@ services:
     build: ./backend
     command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     environment:
-      DB_URL: ${DB_CATALOG_URL:-postgresql+asyncpg://genhospi_admin:GenhospiSecure2026!@db:5432/genhospi_catalog}
-      DB_CATALOG_URL: ${DB_CATALOG_URL:-postgresql+asyncpg://genhospi_admin:GenhospiSecure2026!@db:5432/genhospi_catalog}
-      DB_PRICING_URL: ${DB_PRICING_URL:-postgresql+asyncpg://genhospi_admin:GenhospiSecure2026!@db:5432/genhospi_pricing}
+      DATABASE_URL: ${DB_CATALOG_URL:-postgresql+asyncpg://genhospi_admin:GenhospiSecure2026@db:5432/genhospi_catalog}
+      DB_URL: ${DB_CATALOG_URL:-postgresql+asyncpg://genhospi_admin:GenhospiSecure2026@db:5432/genhospi_catalog}
+      DB_CATALOG_URL: ${DB_CATALOG_URL:-postgresql+asyncpg://genhospi_admin:GenhospiSecure2026@db:5432/genhospi_catalog}
+      DB_PRICING_URL: ${DB_PRICING_URL:-postgresql+asyncpg://genhospi_admin:GenhospiSecure2026@db:5432/genhospi_pricing}
       CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
       CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
       OPENAI_KEY: ${OPENAI_KEY:-}
@@ -56,9 +57,10 @@ services:
     build: ./backend
     command: sh -c "celery -A app.worker.tasks.celery_app worker --loglevel=info"
     environment:
-      DB_URL: ${DB_CATALOG_URL:-postgresql+asyncpg://genhospi_admin:GenhospiSecure2026!@db:5432/genhospi_catalog}
-      DB_CATALOG_URL: ${DB_CATALOG_URL:-postgresql+asyncpg://genhospi_admin:GenhospiSecure2026!@db:5432/genhospi_catalog}
-      DB_PRICING_URL: ${DB_PRICING_URL:-postgresql+asyncpg://genhospi_admin:GenhospiSecure2026!@db:5432/genhospi_pricing}
+      DATABASE_URL: ${DB_CATALOG_URL:-postgresql+asyncpg://genhospi_admin:GenhospiSecure2026@db:5432/genhospi_catalog}
+      DB_URL: ${DB_CATALOG_URL:-postgresql+asyncpg://genhospi_admin:GenhospiSecure2026@db:5432/genhospi_catalog}
+      DB_CATALOG_URL: ${DB_CATALOG_URL:-postgresql+asyncpg://genhospi_admin:GenhospiSecure2026@db:5432/genhospi_catalog}
+      DB_PRICING_URL: ${DB_PRICING_URL:-postgresql+asyncpg://genhospi_admin:GenhospiSecure2026@db:5432/genhospi_pricing}
       CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
       CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
       OPENAI_KEY: ${OPENAI_KEY:-}
