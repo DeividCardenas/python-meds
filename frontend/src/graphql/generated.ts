@@ -53,6 +53,96 @@ export type CargarInvimaMutation = {
   };
 };
 
+// ---------------------------------------------------------------------------
+// Supplier pricing pipeline
+// ---------------------------------------------------------------------------
+
+export type SubirArchivoProveedorMutationVariables = {
+  file: File;
+};
+
+export type SubirArchivoProveedorMutation = {
+  subirArchivoProveedor: {
+    id: string;
+    filename: string;
+    status: string;
+    columnasDetectadas?: string[] | null;
+    mapeoSugerido?: string | null;
+  };
+};
+
+export type MapeoColumnasInput = {
+  cumCode?: string | null;
+  precioUnitario?: string | null;
+  descripcion?: string | null;
+  vigentDesde?: string | null;
+  vigentHasta?: string | null;
+};
+
+export type ConfirmarMapeoProveedorMutationVariables = {
+  archivoId: string;
+  mapeo: MapeoColumnasInput;
+};
+
+export type ConfirmarMapeoProveedorMutation = {
+  confirmarMapeoProveedor: {
+    id: string;
+    filename: string;
+    status: string;
+    columnasDetectadas?: string[] | null;
+    mapeoSugerido?: string | null;
+  };
+};
+
+export type AprobarStagingFilaMutationVariables = {
+  stagingId: string;
+  idCum: string;
+};
+
+export type AprobarStagingFilaMutation = {
+  aprobarStagingFila: {
+    id: string;
+    filaNumero: number;
+    cumCode?: string | null;
+    precioUnitario?: number | null;
+    descripcionRaw?: string | null;
+    estadoHomologacion: string;
+    sugerenciasCum?: string | null;
+    datosRaw: string;
+  };
+};
+
+export type GetStagingFilasQueryVariables = {
+  archivoId: string;
+};
+
+export type GetStagingFilasQuery = {
+  getStagingFilas: Array<{
+    id: string;
+    filaNumero: number;
+    cumCode?: string | null;
+    precioUnitario?: number | null;
+    descripcionRaw?: string | null;
+    estadoHomologacion: string;
+    sugerenciasCum?: string | null;
+    datosRaw: string;
+  }>;
+};
+
+export type SugerenciasCUMQueryVariables = {
+  texto: string;
+};
+
+export type SugerenciasCUMQuery = {
+  sugerenciasCum: Array<{
+    idCum: string;
+    nombre: string;
+    score: number;
+    principioActivo?: string | null;
+    laboratorio?: string | null;
+  }>;
+};
+
 export const SearchMedicamentosDocument = gql`
   query SearchMedicamentos($texto: String!, $empresa: String) {
     buscarMedicamentos(texto: $texto, empresa: $empresa) {
@@ -98,3 +188,70 @@ export const CargarInvimaDocument = gql`
     }
   }
 ` as TypedDocumentNode<CargarInvimaMutation, CargarInvimaMutationVariables>;
+
+export const SubirArchivoProveedorDocument = gql`
+  mutation SubirArchivoProveedor($file: Upload!) {
+    subirArchivoProveedor(file: $file) {
+      id
+      filename
+      status
+      columnasDetectadas
+      mapeoSugerido
+    }
+  }
+` as TypedDocumentNode<SubirArchivoProveedorMutation, SubirArchivoProveedorMutationVariables>;
+
+export const ConfirmarMapeoProveedorDocument = gql`
+  mutation ConfirmarMapeoProveedor($archivoId: ID!, $mapeo: MapeoColumnasInput!) {
+    confirmarMapeoProveedor(archivoId: $archivoId, mapeo: $mapeo) {
+      id
+      filename
+      status
+      columnasDetectadas
+      mapeoSugerido
+    }
+  }
+` as TypedDocumentNode<ConfirmarMapeoProveedorMutation, ConfirmarMapeoProveedorMutationVariables>;
+
+export const AprobarStagingFilaDocument = gql`
+  mutation AprobarStagingFila($stagingId: ID!, $idCum: String!) {
+    aprobarStagingFila(stagingId: $stagingId, idCum: $idCum) {
+      id
+      filaNumero
+      cumCode
+      precioUnitario
+      descripcionRaw
+      estadoHomologacion
+      sugerenciasCum
+      datosRaw
+    }
+  }
+` as TypedDocumentNode<AprobarStagingFilaMutation, AprobarStagingFilaMutationVariables>;
+
+export const GetStagingFilasDocument = gql`
+  query GetStagingFilas($archivoId: ID!) {
+    getStagingFilas(archivoId: $archivoId) {
+      id
+      filaNumero
+      cumCode
+      precioUnitario
+      descripcionRaw
+      estadoHomologacion
+      sugerenciasCum
+      datosRaw
+    }
+  }
+` as TypedDocumentNode<GetStagingFilasQuery, GetStagingFilasQueryVariables>;
+
+export const SugerenciasCUMDocument = gql`
+  query SugerenciasCUM($texto: String!) {
+    sugerenciasCum(texto: $texto) {
+      idCum
+      nombre
+      score
+      principioActivo
+      laboratorio
+    }
+  }
+` as TypedDocumentNode<SugerenciasCUMQuery, SugerenciasCUMQueryVariables>;
+

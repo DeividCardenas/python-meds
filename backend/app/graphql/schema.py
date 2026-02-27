@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Optional
@@ -11,8 +12,14 @@ from sqlmodel import select
 
 from app.core.db import AsyncSessionLocal
 from app.models.medicamento import CargaArchivo, CargaStatus
+from app.models.pricing import ProveedorArchivo, StagingPrecioProveedor
 from app.services.search import buscar_medicamentos_hibrido
-from app.worker.tasks import task_procesar_archivo, task_procesar_invima
+from app.services.pricing_service import (
+    detectar_columnas,
+    sugerir_mapeo_automatico,
+    buscar_sugerencias_cum,
+)
+from app.worker.tasks import task_procesar_archivo, task_procesar_invima, task_procesar_archivo_proveedor
 
 
 @strawberry.type
@@ -32,6 +39,49 @@ class CargaArchivoNode:
     id: strawberry.ID
     filename: str
     status: str
+
+
+# ---------------------------------------------------------------------------
+# Supplier pricing pipeline types
+# ---------------------------------------------------------------------------
+
+@strawberry.type
+class SugerenciaCUMNode:
+    id_cum: str
+    nombre: str
+    score: float
+    principio_activo: Optional[str]
+    laboratorio: Optional[str]
+
+
+@strawberry.type
+class ProveedorArchivoNode:
+    id: strawberry.ID
+    filename: str
+    status: str
+    columnas_detectadas: Optional[list[str]]
+    mapeo_sugerido: Optional[str]  # JSON-encoded dict of auto-detected mapping
+
+
+@strawberry.type
+class StagingFilaNode:
+    id: strawberry.ID
+    fila_numero: int
+    cum_code: Optional[str]
+    precio_unitario: Optional[float]
+    descripcion_raw: Optional[str]
+    estado_homologacion: str
+    sugerencias_cum: Optional[str]  # JSON-encoded list
+    datos_raw: str  # JSON-encoded dict
+
+
+@strawberry.input
+class MapeoColumnasInput:
+    cum_code: Optional[str] = None
+    precio_unitario: Optional[str] = None
+    descripcion: Optional[str] = None
+    vigente_desde: Optional[str] = None
+    vigente_hasta: Optional[str] = None
 
 
 async def _buscar_medicamentos(session, texto: str, empresa: Optional[str]) -> list[MedicamentoNode]:
@@ -87,6 +137,51 @@ class Query:
             status = carga.status.value if isinstance(carga.status, CargaStatus) else str(carga.status)
             return CargaArchivoNode(id=strawberry.ID(str(carga.id)), filename=carga.filename, status=status)
 
+    @strawberry.field
+    async def sugerencias_cum(self, texto: str) -> list[SugerenciaCUMNode]:
+        """Return up to 3 CUM code suggestions for a free-text description."""
+        async with AsyncSessionLocal() as session:
+            sugerencias = await buscar_sugerencias_cum(session, texto, limite=3)
+        return [
+            SugerenciaCUMNode(
+                id_cum=s["id_cum"],
+                nombre=s["nombre"],
+                score=s["score"],
+                principio_activo=s.get("principio_activo"),
+                laboratorio=s.get("laboratorio"),
+            )
+            for s in sugerencias
+        ]
+
+    @strawberry.field
+    async def get_staging_filas(self, archivo_id: strawberry.ID) -> list[StagingFilaNode]:
+        """Return all staging rows for a given supplier file upload."""
+        try:
+            archivo_uuid = UUID(str(archivo_id))
+        except ValueError:
+            return []
+        async with AsyncSessionLocal() as session:
+            filas = (
+                await session.exec(
+                    select(StagingPrecioProveedor)
+                    .where(StagingPrecioProveedor.archivo_id == archivo_uuid)
+                    .order_by(StagingPrecioProveedor.fila_numero)
+                )
+            ).all()
+        return [
+            StagingFilaNode(
+                id=strawberry.ID(str(fila.id)),
+                fila_numero=fila.fila_numero,
+                cum_code=fila.cum_code,
+                precio_unitario=float(fila.precio_unitario) if fila.precio_unitario is not None else None,
+                descripcion_raw=fila.descripcion_raw,
+                estado_homologacion=fila.estado_homologacion,
+                sugerencias_cum=json.dumps(fila.sugerencias_cum) if fila.sugerencias_cum else None,
+                datos_raw=json.dumps(fila.datos_raw),
+            )
+            for fila in filas
+        ]
+
 
 async def _registrar_carga(file: Upload, max_size_bytes: int | None = None) -> tuple[CargaArchivo, Path]:
     if max_size_bytes is not None:
@@ -126,6 +221,47 @@ async def _registrar_carga(file: Upload, max_size_bytes: int | None = None) -> t
     return carga, stored_path
 
 
+async def _guardar_archivo_proveedor(
+    file: Upload, max_size_bytes: int | None = 10 * 1024 * 1024
+) -> tuple[ProveedorArchivo, Path]:
+    """Save an uploaded supplier file and create a ProveedorArchivo record."""
+    if max_size_bytes is not None:
+        current_offset = file.file.tell()
+        file.file.seek(0, 2)
+        if file.file.tell() > max_size_bytes:
+            file.file.seek(current_offset)
+            raise ValueError("El archivo excede el tamaño máximo permitido (10MB).")
+        file.file.seek(current_offset)
+
+    incoming_name = (file.filename or "").replace("\0", "").strip()
+    base_name = incoming_name.split("/")[-1].split("\\")[-1]
+    if base_name in {"", ".", ".."}:
+        base_name = "upload.bin"
+
+    stem, dot, extension = base_name.rpartition(".")
+    if not dot:
+        stem, extension = base_name, ""
+
+    safe_stem = re.sub(r"[^a-zA-Z0-9_-]", "_", stem) or "upload"
+    safe_extension = re.sub(r"[^a-zA-Z0-9]", "", extension)
+    filename = f"{safe_stem}.{safe_extension}" if safe_extension else safe_stem
+    uploads_dir = Path("/app/uploads")
+    uploads_dir.mkdir(parents=True, exist_ok=True)
+
+    async with AsyncSessionLocal() as session:
+        archivo = ProveedorArchivo(filename=filename, status=CargaStatus.PENDING)
+        session.add(archivo)
+        await session.commit()
+        await session.refresh(archivo)
+
+    stored_path = uploads_dir / f"{archivo.id}_{filename}"
+    file.file.seek(0)
+    with stored_path.open("wb") as output_file:
+        output_file.write(file.file.read())
+
+    return archivo, stored_path
+
+
 @strawberry.type
 class Mutation:
     @strawberry.mutation
@@ -142,5 +278,120 @@ class Mutation:
         status = carga.status.value if isinstance(carga.status, CargaStatus) else str(carga.status)
         return CargaArchivoNode(id=strawberry.ID(str(carga.id)), filename=carga.filename, status=status)
 
+    @strawberry.mutation
+    async def subir_archivo_proveedor(self, file: Upload) -> ProveedorArchivoNode:
+        """
+        Step 1 of the supplier ETL: upload the price-list file.
+        Returns the detected column headers and an auto-suggested mapping
+        so the user can review and adjust in the frontend.
+        """
+        archivo, stored_path = await _guardar_archivo_proveedor(file)
+        columnas = detectar_columnas(str(stored_path))
+        mapeo_sugerido = sugerir_mapeo_automatico(columnas)
+
+        async with AsyncSessionLocal() as session:
+            db_archivo = await session.get(ProveedorArchivo, archivo.id)
+            if db_archivo:
+                db_archivo.columnas_detectadas = columnas
+                db_archivo.mapeo_columnas = mapeo_sugerido
+                session.add(db_archivo)
+                await session.commit()
+
+        return ProveedorArchivoNode(
+            id=strawberry.ID(str(archivo.id)),
+            filename=archivo.filename,
+            status=CargaStatus.PENDING.value,
+            columnas_detectadas=columnas,
+            mapeo_sugerido=json.dumps(mapeo_sugerido),
+        )
+
+    @strawberry.mutation
+    async def confirmar_mapeo_proveedor(
+        self,
+        archivo_id: strawberry.ID,
+        mapeo: MapeoColumnasInput,
+    ) -> ProveedorArchivoNode:
+        """
+        Step 2: user confirms (or corrects) the column mapping.
+        Triggers background ETL to stage all rows with JSONB vault.
+        """
+        try:
+            archivo_uuid = UUID(str(archivo_id))
+        except ValueError:
+            raise ValueError("archivo_id inválido")
+
+        mapeo_dict: dict[str, str] = {}
+        if mapeo.cum_code:
+            mapeo_dict["cum_code"] = mapeo.cum_code
+        if mapeo.precio_unitario:
+            mapeo_dict["precio_unitario"] = mapeo.precio_unitario
+        if mapeo.descripcion:
+            mapeo_dict["descripcion"] = mapeo.descripcion
+        if mapeo.vigente_desde:
+            mapeo_dict["vigente_desde"] = mapeo.vigente_desde
+        if mapeo.vigente_hasta:
+            mapeo_dict["vigente_hasta"] = mapeo.vigente_hasta
+
+        async with AsyncSessionLocal() as session:
+            archivo = await session.get(ProveedorArchivo, archivo_uuid)
+            if archivo is None:
+                raise ValueError(f"ProveedorArchivo {archivo_id} no encontrado")
+            archivo.mapeo_columnas = mapeo_dict
+            session.add(archivo)
+            await session.commit()
+            await session.refresh(archivo)
+
+        uploads_dir = Path("/app/uploads")
+        stored_path = next(uploads_dir.glob(f"{archivo_uuid}_*"), None)
+        if stored_path is None:
+            raise FileNotFoundError(f"No se encontró el archivo para {archivo_uuid}")
+
+        task_procesar_archivo_proveedor.delay(str(archivo_uuid), str(stored_path), mapeo_dict)
+
+        return ProveedorArchivoNode(
+            id=strawberry.ID(str(archivo.id)),
+            filename=archivo.filename,
+            status=CargaStatus.PENDING.value,
+            columnas_detectadas=archivo.columnas_detectadas,
+            mapeo_sugerido=json.dumps(mapeo_dict),
+        )
+
+    @strawberry.mutation
+    async def aprobar_staging_fila(
+        self,
+        staging_id: strawberry.ID,
+        id_cum: str,
+    ) -> StagingFilaNode:
+        """
+        Step 3 (human-in-the-loop): approve a specific staging row by assigning
+        a CUM code selected from the suggestions (or entered manually).
+        """
+        try:
+            staging_uuid = UUID(str(staging_id))
+        except ValueError:
+            raise ValueError("staging_id inválido")
+
+        async with AsyncSessionLocal() as session:
+            fila = await session.get(StagingPrecioProveedor, staging_uuid)
+            if fila is None:
+                raise ValueError(f"StagingPrecioProveedor {staging_id} no encontrado")
+            fila.cum_code = id_cum.strip()
+            fila.estado_homologacion = "APROBADO"
+            session.add(fila)
+            await session.commit()
+            await session.refresh(fila)
+
+        return StagingFilaNode(
+            id=strawberry.ID(str(fila.id)),
+            fila_numero=fila.fila_numero,
+            cum_code=fila.cum_code,
+            precio_unitario=float(fila.precio_unitario) if fila.precio_unitario is not None else None,
+            descripcion_raw=fila.descripcion_raw,
+            estado_homologacion=fila.estado_homologacion,
+            sugerencias_cum=json.dumps(fila.sugerencias_cum) if fila.sugerencias_cum else None,
+            datos_raw=json.dumps(fila.datos_raw),
+        )
+
 
 schema = strawberry.Schema(query=Query, mutation=Mutation)
+
