@@ -9,7 +9,7 @@ from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 from sqlmodel import SQLModel
 
-from app.models import medicamento  # noqa: F401
+# Import pricing models so their metadata is registered
 from app.models import pricing  # noqa: F401
 
 
@@ -18,23 +18,26 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-database_url = os.getenv("DB_CATALOG_URL", os.getenv("DB_URL", config.get_main_option("sqlalchemy.url")))
+database_url = os.getenv(
+    "DB_PRICING_URL",
+    config.get_main_option("sqlalchemy.url"),
+)
 config.set_main_option("sqlalchemy.url", database_url)
-target_metadata = SQLModel.metadata
 
-# Tables that belong to genhospi_pricing – exclude from catalog migrations
-_PRICING_ONLY_TABLES = {
+# Only include pricing-related tables in this migration environment
+_PRICING_TABLES = {
     "proveedores",
     "proveedor_aliases",
     "proveedor_archivos",
     "staging_precios_proveedor",
 }
 
+target_metadata = SQLModel.metadata
+
 
 def include_object(object, name, type_, reflected, compare_to):  # noqa: A002
-    """Keep pricing-only tables out of catalog autogenerate."""
     if type_ == "table":
-        return name not in _PRICING_ONLY_TABLES
+        return name in _PRICING_TABLES
     return True
 
 

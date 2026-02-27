@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useState, useEffect, useRef, type FormEvent } from "react";
 import { useLazyQuery } from "@apollo/client";
 
 import {
@@ -25,9 +25,13 @@ const formatPrice = (value: number | null | undefined) =>
 export function BuscadorMedicamentos() {
   const [texto, setTexto] = useState("");
   const [empresa, setEmpresa] = useState("");
+  const [soloActivos, setSoloActivos] = useState(true);
+  const [formaFarmaceutica, setFormaFarmaceutica] = useState("");
+  const [hasSearched, setHasSearched] = useState(false);
+  const lastQueryRef = useRef<{ texto: string; empresa: string | null; soloActivos: boolean; formaFarmaceutica: string | null } | null>(null);
   const [showCopiedToast, setShowCopiedToast] = useState(false);
   const [modalPrincipioActivo, setModalPrincipioActivo] = useState<string | null>(null);
-  const [buscar, { data, loading, error }] = useLazyQuery<
+  const [buscar, { data, loading }] = useLazyQuery<
     SearchMedicamentosQuery,
     SearchMedicamentosQueryVariables
   >(SearchMedicamentosDocument);
@@ -37,17 +41,30 @@ export function BuscadorMedicamentos() {
   >(ComparativaPreciosDocument);
   const resultados = data?.buscarMedicamentos ?? [];
   const comparativaResultados = comparativaData?.comparativaPrecios ?? [];
+
+  // Re-execute the last query if the component remounts (e.g. StrictMode or navigation)
+  // and we already had a pending/completed search.
+  useEffect(() => {
+    if (lastQueryRef.current) {
+      setHasSearched(true);
+      buscar({ variables: lastQueryRef.current });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const exportRows = resultados.map((item) => ({
     cum: item.idCum ?? "",
     nombre: toTitleCase(item.nombreLimpio),
     principioActivo: toTitleCase(item.principioActivo),
-    formaFarmaceutica: toTitleCase(item.formaFarmaceutica),
+    formaFarmaceuticaExport: toTitleCase(item.formaFarmaceutica),
     laboratorio: toTitleCase(item.laboratorio),
     registroInvima: item.registroInvima ?? "",
     precioUnitario: formatPrice(item.precioUnitario),
     precioEmpaque: formatPrice(item.precioEmpaque),
     esRegulado: item.esRegulado ? "SI" : "NO",
     precioMaximoRegulado: formatPrice(item.precioMaximoRegulado),
+    estadoCum: item.estadoCum ?? "",
+    activo: item.activo ? "SI" : "NO",
   }));
 
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
@@ -55,12 +72,15 @@ export function BuscadorMedicamentos() {
     if (!texto.trim()) {
       return;
     }
-    buscar({
-      variables: {
-        texto: texto.trim(),
-        empresa: empresa.trim() || null,
-      },
-    });
+    const variables = {
+      texto: texto.trim(),
+      empresa: empresa.trim() || null,
+      soloActivos,
+      formaFarmaceutica: formaFarmaceutica.trim() || null,
+    };
+    lastQueryRef.current = variables;
+    setHasSearched(true);
+    buscar({ variables });
   };
 
   const abrirComparativa = (principioActivo: string | null | undefined) => {
@@ -93,7 +113,7 @@ export function BuscadorMedicamentos() {
         row.cum,
         row.nombre,
         row.principioActivo,
-        row.formaFarmaceutica,
+        row.formaFarmaceuticaExport,
         row.laboratorio,
         row.registroInvima,
         row.precioUnitario,
@@ -129,6 +149,8 @@ export function BuscadorMedicamentos() {
       "Precio Empaque",
       "Es Regulado",
       "Precio Máximo",
+      "Estado CUM",
+      "Activo",
     ].join("\t");
     const body = exportRows
       .map((row) =>
@@ -136,13 +158,15 @@ export function BuscadorMedicamentos() {
           row.cum,
           row.nombre,
           row.principioActivo,
-          row.formaFarmaceutica,
+          row.formaFarmaceuticaExport,
           row.laboratorio,
           row.registroInvima,
           row.precioUnitario,
           row.precioEmpaque,
           row.esRegulado,
           row.precioMaximoRegulado,
+          row.estadoCum,
+          row.activo,
         ].join("\t"),
       )
       .join("\n");
@@ -188,7 +212,41 @@ export function BuscadorMedicamentos() {
         </button>
       </form>
 
-      {error ? <p className="mt-4 rounded-lg bg-red-50 px-4 py-3 text-sm text-red-700">Error: {error.message}</p> : null}
+      {/* Filtros avanzados */}
+      <div className="mt-4 flex flex-wrap items-center gap-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
+        <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Filtros</span>
+        {/* Forma farmacéutica */}
+        <div className="flex items-center gap-2">
+          <label htmlFor="filter-ff" className="whitespace-nowrap text-sm text-slate-600">Forma farmacéutica</label>
+          <input
+            id="filter-ff"
+            value={formaFarmaceutica}
+            onChange={(e) => setFormaFarmaceutica(e.target.value)}
+            placeholder="ej. tableta, capsula..."
+            className="h-9 rounded-lg border border-slate-300 bg-white px-3 text-sm outline-none transition focus:border-blue-600 focus:ring-2 focus:ring-blue-100"
+          />
+        </div>
+        {/* Solo activos */}
+        <label className="flex cursor-pointer items-center gap-2 select-none">
+          <div
+            role="checkbox"
+            aria-checked={soloActivos}
+            tabIndex={0}
+            onClick={() => setSoloActivos((v) => !v)}
+            onKeyDown={(e) => e.key === " " && setSoloActivos((v) => !v)}
+            className={`relative h-5 w-9 rounded-full transition-colors ${
+              soloActivos ? "bg-teal-600" : "bg-slate-300"
+            }`}
+          >
+            <span
+              className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform ${
+                soloActivos ? "translate-x-4" : "translate-x-0.5"
+              }`}
+            />
+          </div>
+          <span className="text-sm text-slate-700">Solo CUM vigentes</span>
+        </label>
+      </div>
 
       <div className="mt-8">
         <div className="mb-4 flex flex-wrap items-center justify-end gap-2">
@@ -250,7 +308,26 @@ export function BuscadorMedicamentos() {
                       Regulado · Máx {formatPrice(item.precioMaximoRegulado)}
                     </p>
                   ) : null}
-                  <h3 className="text-lg font-bold text-slate-900">{nombreComercial}</h3>
+                  {item.estadoCum ? (
+                    <span
+                      className={`mb-2 mr-2 inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+                        item.activo ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"
+                      }`}
+                    >
+                      {item.activo ? "✓ " : "✗ "}{item.estadoCum}
+                    </span>
+                  ) : null}                  {/* Badge de estado CUM */}
+                  {item.estadoCum ? (
+                    <span
+                      className={`mb-2 mr-2 inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold ${
+                        item.activo
+                          ? "bg-emerald-100 text-emerald-700"
+                          : "bg-red-100 text-red-700"
+                      }`}
+                    >
+                      {item.activo ? "✓" : "✗"} {item.estadoCum}
+                    </span>
+                  ) : null}                  <h3 className="text-lg font-bold text-slate-900">{nombreComercial}</h3>
                   {mostrarPrincipioActivo ? (
                     <p className="mt-2 text-sm text-slate-500">
                       Principio activo: <span className="font-medium text-slate-600">{principioActivo}</span>
@@ -284,9 +361,15 @@ export function BuscadorMedicamentos() {
           </div>
         ) : null}
 
-        {!loading && resultados.length === 0 ? (
+        {!loading && hasSearched && resultados.length === 0 ? (
           <p className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
             No hay resultados para mostrar.
+          </p>
+        ) : null}
+
+        {!hasSearched && !loading ? (
+          <p className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
+            Ingresa un término para buscar medicamentos.
           </p>
         ) : null}
       </div>

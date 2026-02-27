@@ -6,12 +6,14 @@ Servicio de extracción y sincronización mensual de los catálogos CUM
 mediante la API Socrata (SODA).
 """
 
+import asyncio
 import logging
 import os
 from datetime import datetime, timezone
 from typing import Any
 
 import aiohttp
+from sqlalchemy import text as sa_text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlmodel import select
@@ -36,7 +38,12 @@ SOCRATA_ENDPOINTS: dict[str, str] = {
 SOCRATA_METADATA_URL = "https://www.datos.gov.co/api/views/{dataset_id}.json"
 
 # Tamaño del lote para paginación SoQL – evita desbordamiento de memoria
-CUM_BATCH_SIZE = int(os.getenv("CUM_BATCH_SIZE", "5000"))
+CUM_BATCH_SIZE = int(os.getenv("CUM_BATCH_SIZE", "2000"))
+
+# Máximo de filas por sentencia UPSERT.
+# PostgreSQL/asyncpg limita a 32 767 parámetros por query.
+# Con 28 campos por fila → máx. ≈ 1 170 filas; usamos 1 000 como margen seguro.
+_UPSERT_CHUNK_SIZE = int(os.getenv("CUM_UPSERT_CHUNK_SIZE", "1000"))
 
 # Campos esperados de la API Socrata (snake_case como los devuelve SODA)
 _CUM_FIELDS = (
@@ -45,13 +52,28 @@ _CUM_FIELDS = (
     "producto",
     "titular",
     "registrosanitario",
+    "fechaexpedicion",
     "fechavencimiento",
+    "estadoregistro",
     "cantidadcum",
     "descripcioncomercial",
     "estadocum",
+    "fechaactivo",
+    "fechainactivo",
+    "muestramedica",
+    "unidad",
     "atc",
     "descripcionatc",
+    "viaadministracion",
+    "concentracion",
     "principioactivo",
+    "unidadmedida",
+    "cantidad",
+    "unidadreferencia",
+    "formafarmaceutica",
+    "nombrerol",
+    "tiporol",
+    "modalidad",
 )
 
 
@@ -85,7 +107,7 @@ def _parse_datetime(value: Any) -> datetime | None:
     if not value:
         return None
     # Socrata devuelve fechas en formato "YYYY-MM-DDTHH:MM:SS.mmm"
-    for fmt in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+    for fmt in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d", "%m/%d/%Y"):
         try:
             return datetime.strptime(str(value), fmt).replace(tzinfo=timezone.utc)
         except ValueError:
@@ -114,13 +136,28 @@ def _map_record(raw: dict[str, Any]) -> dict[str, Any]:
         "producto": raw.get("producto"),
         "titular": raw.get("titular"),
         "registrosanitario": raw.get("registrosanitario"),
+        "fechaexpedicion": _parse_datetime(raw.get("fechaexpedicion")),
         "fechavencimiento": _parse_datetime(raw.get("fechavencimiento")),
+        "estadoregistro": raw.get("estadoregistro"),
         "cantidadcum": _parse_float(raw.get("cantidadcum")),
         "descripcioncomercial": raw.get("descripcioncomercial"),
         "estadocum": raw.get("estadocum"),
+        "fechaactivo": _parse_datetime(raw.get("fechaactivo")),
+        "fechainactivo": _parse_datetime(raw.get("fechainactivo")),
+        "muestramedica": raw.get("muestramedica"),
+        "unidad": raw.get("unidad"),
         "atc": raw.get("atc"),
         "descripcionatc": raw.get("descripcionatc"),
+        "viaadministracion": raw.get("viaadministracion"),
+        "concentracion": raw.get("concentracion"),
         "principioactivo": raw.get("principioactivo"),
+        "unidadmedida": raw.get("unidadmedida"),
+        "cantidad": raw.get("cantidad"),
+        "unidadreferencia": raw.get("unidadreferencia"),
+        "formafarmaceutica": raw.get("formafarmaceutica"),
+        "nombrerol": raw.get("nombrerol"),
+        "tiporol": raw.get("tiporol"),
+        "modalidad": raw.get("modalidad"),
     }
 
 
@@ -292,6 +329,11 @@ async def _update_sync_log(
 # ---------------------------------------------------------------------------
 
 
+# Reintentos ante errores HTTP 5xx de Socrata (el servidor falla en offsets grandes)
+_HTTP_RETRIES = int(os.getenv("CUM_HTTP_RETRIES", "5"))
+_HTTP_RETRY_BACKOFF = float(os.getenv("CUM_HTTP_RETRY_BACKOFF", "3.0"))  # segundos base
+
+
 async def _fetch_endpoint(
     session: aiohttp.ClientSession,
     url: str,
@@ -302,20 +344,45 @@ async def _fetch_endpoint(
     Itera todos los registros de *url* en lotes usando paginación SoQL
     ($limit / $offset) y aplica un upsert por cada lote.
 
+    - Usa $order para estabilizar la paginación en Socrata.
+    - Reintenta hasta _HTTP_RETRIES veces ante errores HTTP 5xx con backoff
+      exponencial para tolerar fallos transitorios del servidor Socrata.
+
     Retorna el número total de registros procesados.
     """
     offset = 0
     total_procesados = 0
 
     while True:
-        params = {"$limit": CUM_BATCH_SIZE, "$offset": offset}
-        try:
-            async with session.get(url, params=params) as response:
-                response.raise_for_status()
-                batch_raw: list[dict[str, Any]] = await response.json(content_type=None)
-        except aiohttp.ClientError as exc:
-            logger.error("Error HTTP al consumir %s (offset=%s): %s", fuente, offset, exc)
-            raise
+        params = {
+            "$limit": CUM_BATCH_SIZE,
+            "$offset": offset,
+            "$order": "expediente ASC, consecutivocum ASC",
+        }
+        batch_raw: list[dict[str, Any]] | None = None
+        for attempt in range(1, _HTTP_RETRIES + 1):
+            try:
+                async with session.get(url, params=params) as response:
+                    response.raise_for_status()
+                    batch_raw = await response.json(content_type=None)
+                break  # éxito – salir del loop de reintentos
+            except aiohttp.ClientResponseError as exc:
+                if exc.status and exc.status >= 500 and attempt < _HTTP_RETRIES:
+                    wait = _HTTP_RETRY_BACKOFF * (2 ** (attempt - 1))
+                    logger.warning(
+                        "Socrata %s HTTP %s en offset=%s, intento %s/%s. Reintentando en %.1fs…",
+                        fuente, exc.status, offset, attempt, _HTTP_RETRIES, wait,
+                    )
+                    await asyncio.sleep(wait)
+                else:
+                    logger.error("Error HTTP al consumir %s (offset=%s): %s", fuente, offset, exc)
+                    raise
+            except aiohttp.ClientError as exc:
+                logger.error("Error HTTP al consumir %s (offset=%s): %s", fuente, offset, exc)
+                raise
+
+        if batch_raw is None:  # no debería ocurrir, pero por si acaso
+            break
 
         if not batch_raw:
             # Sin más registros: paginación finalizada
@@ -329,19 +396,24 @@ async def _fetch_endpoint(
         rows = _deduplicate_chunk(rows)
 
         if rows:
-            try:
-                async with session_factory() as db_session:
-                    await db_session.execute(construir_upsert_cum(rows))
-                    await db_session.commit()
-            except Exception as exc:
-                logger.error(
-                    "Error durante upsert de %s (offset=%s, lote=%s): %s",
-                    fuente,
-                    offset,
-                    len(rows),
-                    exc,
-                )
-                raise
+            # Sub-batching para no superar el límite de 32 767 parámetros de PostgreSQL
+            for i in range(0, len(rows), _UPSERT_CHUNK_SIZE):
+                sub_chunk = rows[i : i + _UPSERT_CHUNK_SIZE]
+                try:
+                    async with session_factory() as db_session:
+                        await db_session.execute(construir_upsert_cum(sub_chunk))
+                        await db_session.commit()
+                except Exception as exc:
+                    logger.error(
+                        "Error durante upsert de %s (offset=%s, sub_chunk=%s-%s, tamaño=%s): %s",
+                        fuente,
+                        offset,
+                        i,
+                        i + len(sub_chunk),
+                        len(sub_chunk),
+                        exc,
+                    )
+                    raise
 
         total_procesados += len(rows)
         logger.info(
@@ -418,4 +490,46 @@ async def sincronizar_catalogos_cum(
                 logger.error("CUM [%s] falló: %s", fuente, exc)
                 resultados[fuente] = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
 
+    # Propagar estado_cum y activo a la tabla medicamentos tras la sincronización
+    try:
+        sync_result = await sincronizar_estado_medicamentos(session_factory)
+        resultados["_estado_sync"] = {"status": "ok", **sync_result}
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Error propagando estado CUM a medicamentos: %s", exc)
+        resultados["_estado_sync"] = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
+
     return resultados
+
+
+async def sincronizar_estado_medicamentos(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> dict[str, Any]:
+    """
+    Propaga el estado del catálogo CUM a la tabla medicamentos.
+
+    Para cada medicamento que tenga un id_cum vinculado, actualiza:
+    - estado_cum   → valor raw de medicamentos_cum.estadocum
+    - activo       → True si estadocum es 'vigente' o 'activo' (case-insensitive)
+
+    Los medicamentos sin id_cum conservan activo=true (valor por defecto).
+    Se llama automáticamente al final de sincronizar_catalogos_cum.
+    """
+    async with session_factory() as session:
+        result = await session.execute(
+            sa_text("""
+            UPDATE medicamentos m
+            SET
+                estado_cum = c.estadocum,
+                activo     = lower(c.estadocum) IN ('vigente', 'activo')
+            FROM medicamentos_cum c
+            WHERE m.id_cum = c.id_cum
+              AND m.id_cum IS NOT NULL
+            """)
+        )
+        await session.commit()
+        filas_actualizadas = result.rowcount
+    logger.info(
+        "Estado CUM propagado a medicamentos: %s filas actualizadas.",
+        filas_actualizadas,
+    )
+    return {"filas_actualizadas": filas_actualizadas}

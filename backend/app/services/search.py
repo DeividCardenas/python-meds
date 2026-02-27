@@ -56,6 +56,8 @@ async def buscar_medicamentos_hibrido(
     session: AsyncSession,
     texto: str,
     empresa: Optional[str],
+    solo_activos: bool = True,
+    forma_farmaceutica: Optional[str] = None,
 ) -> list[tuple]:
     texto_preparado = _preparar_texto_busqueda(texto)
     if not texto_preparado:
@@ -66,6 +68,8 @@ async def buscar_medicamentos_hibrido(
         texto_preparado=texto_preparado,
         empresa=empresa,
         query_embedding=query_embedding,
+        solo_activos=solo_activos,
+        forma_farmaceutica=forma_farmaceutica,
     )
     return (await session.exec(statement.params(**params))).all()
 
@@ -74,6 +78,8 @@ def _construir_statement_hibrido(
     texto_preparado: str,
     empresa: Optional[str],
     query_embedding: Optional[list[float]],
+    solo_activos: bool = True,
+    forma_farmaceutica: Optional[str] = None,
 ):
 
     nombre_preparado = func.regexp_replace(
@@ -106,6 +112,8 @@ def _construir_statement_hibrido(
             Medicamento.forma_farmaceutica,
             Medicamento.registro_invima,
             Medicamento.principio_activo,
+            Medicamento.activo,
+            Medicamento.estado_cum,
             rank_expr,
         )
         .where(tsvector_expr.op("@@")(tsquery_expr))
@@ -117,6 +125,17 @@ def _construir_statement_hibrido(
     }
     if query_embedding:
         params["query_embedding"] = query_embedding
+
+    # Filtro: solo medicamentos activos (CUM Vigente/Activo o sin CUM vinculado)
+    if solo_activos:
+        statement = statement.where(Medicamento.activo == True)  # noqa: E712
+
+    # Filtro: forma farmacéutica (búsqueda parcial, case-insensitive)
+    if forma_farmaceutica and forma_farmaceutica.strip():
+        ff_norm = forma_farmaceutica.strip().lower()
+        statement = statement.where(
+            func.lower(Medicamento.forma_farmaceutica).contains(ff_norm)
+        )
 
     if empresa:
         statement = (

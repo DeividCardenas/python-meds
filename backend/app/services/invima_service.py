@@ -17,7 +17,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.core.db import AsyncSessionLocal
 from app.models.medicamento import Medicamento
 
-INVIMA_BATCH_SIZE = 5000
+INVIMA_BATCH_SIZE = 2000
 EMBEDDING_STATUS_PENDING = "PENDING"
 logger = logging.getLogger(__name__)
 TMP_INVIMA_COLUMNS = (

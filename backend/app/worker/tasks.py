@@ -13,8 +13,9 @@ from celery.schedules import crontab
 from sqlalchemy import insert
 from sqlmodel import select
 
-from app.core.db import create_task_session_factory
+from app.core.db import create_task_session_factory, create_pricing_task_session_factory
 from app.models.medicamento import CargaArchivo, CargaStatus, Medicamento, PrecioReferencia
+from app.models.pricing import ProveedorArchivo
 from app.services.cum_socrata_service import sincronizar_catalogos_cum
 from app.services.invima_service import procesar_maestro_invima
 from app.services.pricing_service import procesar_archivo_proveedor
@@ -339,6 +340,30 @@ def _mark_failed(carga_id: str, exc: Exception) -> None:
                 logger.exception("No se pudo cerrar engine temporal para carga %s", carga_id)
 
 
+async def _set_proveedor_archivo_failed(archivo_id: str, exc: Exception) -> None:
+    pricing_engine, pricing_sf = create_pricing_task_session_factory()
+    try:
+        archivo_uuid = UUID(archivo_id)
+        async with pricing_sf() as session:
+            archivo = await session.get(ProveedorArchivo, archivo_uuid)
+            if archivo:
+                archivo.status = CargaStatus.FAILED
+                archivo.errores_log = {"error": f"{type(exc).__name__}: {exc}"}
+                session.add(archivo)
+                await session.commit()
+    except Exception:  # noqa: BLE001
+        logger.exception("No se pudo marcar ProveedorArchivo FAILED para %s", archivo_id)
+    finally:
+        await pricing_engine.dispose()
+
+
+def _mark_pricing_failed(archivo_id: str, exc: Exception) -> None:
+    try:
+        _run_async_safely(_set_proveedor_archivo_failed(archivo_id, exc))
+    except Exception:  # noqa: BLE001
+        logger.exception("Error en _mark_pricing_failed para archivo %s", archivo_id)
+
+
 @celery_app.task(name="task_procesar_archivo")
 def task_procesar_archivo(carga_id: str, file_path: str) -> dict[str, Any]:
     try:
@@ -392,16 +417,21 @@ def task_sincronizar_cum() -> dict[str, Any]:
 async def _procesar_archivo_proveedor_async(
     archivo_id: str, file_path: str, mapeo: dict[str, str]
 ) -> dict[str, Any]:
-    task_engine, session_factory = create_task_session_factory()
+    # pricing DB: ProveedorArchivo + StagingPrecioProveedor
+    pricing_engine, pricing_session_factory = create_pricing_task_session_factory()
+    # catalog DB: medicamentos (for buscar_sugerencias_cum)
+    catalog_engine, catalog_session_factory = create_task_session_factory()
     try:
         return await procesar_archivo_proveedor(
             archivo_id=archivo_id,
             file_path=file_path,
             mapeo=mapeo,
-            session_factory=session_factory,
+            session_factory=pricing_session_factory,
+            catalog_session_factory=catalog_session_factory,
         )
     finally:
-        await task_engine.dispose()
+        await pricing_engine.dispose()
+        await catalog_engine.dispose()
 
 
 @celery_app.task(name="task_procesar_archivo_proveedor")
@@ -416,7 +446,7 @@ def task_procesar_archivo_proveedor(
     try:
         return _run_async_safely(_procesar_archivo_proveedor_async(archivo_id, file_path, mapeo))
     except Exception as exc:  # noqa: BLE001
-        _mark_failed(archivo_id, exc)
+        _mark_pricing_failed(archivo_id, exc)
         raise
     finally:
         _cleanup_temp_file(file_path)

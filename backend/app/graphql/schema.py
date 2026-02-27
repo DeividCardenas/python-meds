@@ -10,7 +10,7 @@ import strawberry
 from strawberry.file_uploads import Upload
 from sqlmodel import select
 
-from app.core.db import AsyncSessionLocal
+from app.core.db import AsyncSessionLocal, AsyncPricingSessionLocal
 from app.models.medicamento import CargaArchivo, CargaStatus
 from app.models.pricing import ProveedorArchivo, StagingPrecioProveedor
 from app.services.search import buscar_medicamentos_hibrido
@@ -18,6 +18,7 @@ from app.services.pricing_service import (
     detectar_columnas,
     sugerir_mapeo_automatico,
     buscar_sugerencias_cum,
+    publicar_precios_aprobados,
 )
 from app.services.supplier_detector import detectar_proveedor
 from app.worker.tasks import task_procesar_archivo, task_procesar_invima, task_procesar_archivo_proveedor
@@ -37,6 +38,8 @@ class MedicamentoNode:
     precio_empaque: Optional[float] = None
     es_regulado: bool = False
     precio_maximo_regulado: Optional[float] = None
+    activo: bool = True
+    estado_cum: Optional[str] = None
 
 
 @strawberry.type
@@ -87,6 +90,15 @@ class StagingFilaNode:
     confianza_score: Optional[float] = None
 
 
+@strawberry.type
+class PublicarResultadoNode:
+    """Result returned by the publicarPreciosProveedor mutation."""
+
+    filas_publicadas: int
+    archivo_id: strawberry.ID
+    status: str
+
+
 @strawberry.input
 class MapeoColumnasInput:
     cum_code: Optional[str] = None
@@ -99,8 +111,20 @@ class MapeoColumnasInput:
     vigente_hasta: Optional[str] = None
 
 
-async def _buscar_medicamentos(session, texto: str, empresa: Optional[str]) -> list[MedicamentoNode]:
-    medicamentos = await buscar_medicamentos_hibrido(session, texto=texto, empresa=empresa)
+async def _buscar_medicamentos(
+    session,
+    texto: str,
+    empresa: Optional[str],
+    solo_activos: bool = True,
+    forma_farmaceutica: Optional[str] = None,
+) -> list[MedicamentoNode]:
+    medicamentos = await buscar_medicamentos_hibrido(
+        session,
+        texto=texto,
+        empresa=empresa,
+        solo_activos=solo_activos,
+        forma_farmaceutica=forma_farmaceutica,
+    )
     return [
         MedicamentoNode(
             id=strawberry.ID(str(medicamento_id)),
@@ -108,13 +132,15 @@ async def _buscar_medicamentos(session, texto: str, empresa: Optional[str]) -> l
             distancia=float(distancia),
             id_cum=id_cum,
             laboratorio=laboratorio,
-            forma_farmaceutica=forma_farmaceutica,
+            forma_farmaceutica=forma_farmaceutica_val,
             registro_invima=registro_invima,
             principio_activo=principio_activo,
             precio_unitario=None,
             precio_empaque=None,
             es_regulado=False,
             precio_maximo_regulado=None,
+            activo=bool(activo),
+            estado_cum=estado_cum,
         )
         for (
             medicamento_id,
@@ -122,9 +148,11 @@ async def _buscar_medicamentos(session, texto: str, empresa: Optional[str]) -> l
             distancia,
             id_cum,
             laboratorio,
-            forma_farmaceutica,
+            forma_farmaceutica_val,
             registro_invima,
             principio_activo,
+            activo,
+            estado_cum,
             _rank,
         ) in medicamentos
     ]
@@ -137,9 +165,17 @@ class Query:
         self,
         texto: str,
         empresa: Optional[str] = None,
+        solo_activos: bool = True,
+        forma_farmaceutica: Optional[str] = None,
     ) -> list[MedicamentoNode]:
         async with AsyncSessionLocal() as session:
-            return await _buscar_medicamentos(session, texto=texto, empresa=empresa)
+            return await _buscar_medicamentos(
+                session,
+                texto=texto,
+                empresa=empresa,
+                solo_activos=solo_activos,
+                forma_farmaceutica=forma_farmaceutica,
+            )
 
     @strawberry.field
     async def get_status_carga(self, id: strawberry.ID) -> Optional[CargaArchivoNode]:
@@ -213,7 +249,7 @@ class Query:
             archivo_uuid = UUID(str(archivo_id))
         except ValueError:
             return []
-        async with AsyncSessionLocal() as session:
+        async with AsyncPricingSessionLocal() as session:
             filas = (
                 await session.exec(
                     select(StagingPrecioProveedor)
@@ -306,7 +342,7 @@ async def _guardar_archivo_proveedor(
     uploads_dir = Path("/app/uploads")
     uploads_dir.mkdir(parents=True, exist_ok=True)
 
-    async with AsyncSessionLocal() as session:
+    async with AsyncPricingSessionLocal() as session:
         archivo = ProveedorArchivo(filename=filename, status=CargaStatus.PENDING)
         session.add(archivo)
         await session.commit()
@@ -354,7 +390,7 @@ class Mutation:
         # Pillar 2 – Auto-detect supplier from filename + column fingerprint
         deteccion = detectar_proveedor(archivo.filename, columnas)
 
-        async with AsyncSessionLocal() as session:
+        async with AsyncPricingSessionLocal() as session:
             db_archivo = await session.get(ProveedorArchivo, archivo.id)
             if db_archivo:
                 db_archivo.columnas_detectadas = columnas
@@ -415,7 +451,7 @@ class Mutation:
         if mapeo.vigente_hasta:
             mapeo_dict["vigente_hasta"] = mapeo.vigente_hasta
 
-        async with AsyncSessionLocal() as session:
+        async with AsyncPricingSessionLocal() as session:
             archivo = await session.get(ProveedorArchivo, archivo_uuid)
             if archivo is None:
                 raise ValueError(f"ProveedorArchivo {archivo_id} no encontrado")
@@ -454,7 +490,7 @@ class Mutation:
         except ValueError:
             raise ValueError("staging_id inválido")
 
-        async with AsyncSessionLocal() as session:
+        async with AsyncPricingSessionLocal() as session:
             fila = await session.get(StagingPrecioProveedor, staging_uuid)
             if fila is None:
                 raise ValueError(f"StagingPrecioProveedor {staging_id} no encontrado")
@@ -478,6 +514,34 @@ class Mutation:
             datos_raw=json.dumps(fila.datos_raw),
             fecha_vigencia_indefinida=bool(fila.fecha_vigencia_indefinida),
             confianza_score=float(fila.confianza_score) if fila.confianza_score is not None else None,
+        )
+
+    @strawberry.mutation
+    async def publicar_precios_proveedor(
+        self,
+        archivo_id: strawberry.ID,
+    ) -> PublicarResultadoNode:
+        """
+        Step 4 (Publish): promote all APROBADO staging rows to the production
+        ``precios_proveedor`` table in a single ACID transaction, then mark the
+        ProveedorArchivo record as PUBLICADO.
+
+        Raises if the archivo does not exist or has no APROBADO rows.
+        """
+        try:
+            archivo_uuid = UUID(str(archivo_id))
+        except ValueError:
+            raise ValueError("archivo_id inválido")
+
+        resultado = await publicar_precios_aprobados(
+            str(archivo_uuid),
+            AsyncPricingSessionLocal,
+        )
+
+        return PublicarResultadoNode(
+            filas_publicadas=resultado["filas_publicadas"],
+            archivo_id=archivo_id,
+            status="PUBLICADO",
         )
 
 

@@ -49,9 +49,9 @@ def find_input_files(directory: Path) -> List[Path]:
 def read_any(path: Path) -> pl.DataFrame:
     suffix = path.suffix.lower()
     if suffix in [".csv"]:
-        return pl.read_csv(path, infer_schema_length=5000)
+        return pl.read_csv(path, infer_schema_length=2000)
     if suffix in [".tsv", ".txt"]:
-        return pl.read_csv(path, separator="\t", infer_schema_length=5000)
+        return pl.read_csv(path, separator="\t", infer_schema_length=2000)
     if suffix in [".xlsx", ".xls"]:
         # polars puede leer Excel directamente
         return pl.read_excel(path)

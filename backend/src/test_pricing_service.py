@@ -19,7 +19,7 @@ class PricingServiceTests(unittest.TestCase):
     # _parse_decimal
     # -----------------------------------------------------------------------
     def test_parse_decimal_entero(self):
-        self.assertEqual(_parse_decimal("15000"), Decimal("15000"))
+        self.assertEqual(_parse_decimal("12000"), Decimal("12000"))
 
     def test_parse_decimal_europeo_con_punto_y_coma(self):
         self.assertEqual(_parse_decimal("1.234,56"), Decimal("1234.56"))
@@ -76,7 +76,7 @@ class PricingServiceTests(unittest.TestCase):
         with NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
             tmp_path = f.name
         try:
-            df = pl.DataFrame({"CUM": ["123-01"], "Producto": ["Test"], "Precio": [5000]})
+            df = pl.DataFrame({"CUM": ["123-01"], "Producto": ["Test"], "Precio": [2000]})
             df.write_excel(tmp_path)
             cols = detectar_columnas(tmp_path)
             self.assertEqual(cols, ["CUM", "Producto", "Precio"])

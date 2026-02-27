@@ -216,6 +216,7 @@ async def procesar_archivo_proveedor(
     file_path: str,
     mapeo: dict[str, str],
     session_factory: Any,
+    catalog_session_factory: Any | None = None,
 ) -> dict[str, Any]:
     """
     ETL pipeline for a supplier price file.
@@ -336,7 +337,11 @@ async def procesar_archivo_proveedor(
         # Resolve CUM suggestions for rows missing a CUM code
         rows_needing_resolution = [r for r in staging_rows if not r["cum_code"] and r["descripcion_raw"]]
         if rows_needing_resolution:
-            async with session_factory() as session:
+            # CUM search runs against genhospi_catalog (medicamentos table).
+            # Use catalog_session_factory when provided, otherwise fall back to
+            # the main session_factory (single-DB setup).
+            cum_sf = catalog_session_factory if catalog_session_factory is not None else session_factory
+            async with cum_sf() as session:
                 for row in rows_needing_resolution:
                     sugerencias = await buscar_sugerencias_cum(session, row["descripcion_raw"])
                     row["sugerencias_cum"] = sugerencias
@@ -407,3 +412,89 @@ async def procesar_archivo_proveedor(
                 session.add(archivo)
                 await session.commit()
         raise
+
+
+async def publicar_precios_aprobados(
+    archivo_id: str,
+    session_factory: Any,
+) -> dict[str, Any]:
+    """
+    Publish all APROBADO staging rows for *archivo_id* to the production
+    ``precios_proveedor`` table in a single ACID transaction.
+
+    Steps (all inside one transaction):
+      1. Load the ProveedorArchivo record – raises if not found.
+      2. Select every StagingPrecioProveedor row with
+         estado_homologacion = 'APROBADO' for this archivo.
+      3. Insert a PrecioProveedor row for each staging row.
+      4. Update ProveedorArchivo.status → 'PUBLICADO'.
+      5. Commit.  Any exception triggers a full rollback.
+
+    Returns a dict with ``{"filas_publicadas": N}``.
+    Raises ``ValueError`` when the archivo is missing or has no APROBADO rows.
+    """
+    from datetime import datetime as _datetime
+    from app.models.pricing import PrecioProveedor
+
+    archivo_uuid = UUID(archivo_id)
+
+    async with session_factory() as session:
+        try:
+            # Step 1 – load upload record
+            archivo: ProveedorArchivo | None = await session.get(ProveedorArchivo, archivo_uuid)
+            if archivo is None:
+                raise ValueError(f"ProveedorArchivo {archivo_id} no encontrado")
+
+            # Step 2 – select all APROBADO staging rows
+            stmt = (
+                select(StagingPrecioProveedor)
+                .where(StagingPrecioProveedor.archivo_id == archivo_uuid)
+                .where(StagingPrecioProveedor.estado_homologacion == "APROBADO")
+            )
+            filas = (await session.exec(stmt)).all()
+
+            if not filas:
+                raise ValueError(
+                    f"No hay filas con estado APROBADO para el archivo {archivo_id}. "
+                    "Revisa y aprueba filas en la pantalla de homologación antes de publicar."
+                )
+
+            fecha_publicacion = _datetime.utcnow()
+
+            # Step 3 – insert production rows
+            for fila in filas:
+                precio = PrecioProveedor(
+                    staging_id=fila.id,
+                    archivo_id=fila.archivo_id,
+                    proveedor_id=archivo.proveedor_id,
+                    cum_code=fila.cum_code or "",
+                    medicamento_id=fila.medicamento_id,
+                    precio_unitario=fila.precio_unitario,
+                    precio_unidad=fila.precio_unidad,
+                    precio_presentacion=fila.precio_presentacion,
+                    porcentaje_iva=fila.porcentaje_iva,
+                    vigente_desde=fila.vigente_desde,
+                    vigente_hasta=fila.vigente_hasta,
+                    fecha_vigencia_indefinida=fila.fecha_vigencia_indefinida,
+                    confianza_score=fila.confianza_score,
+                    fecha_publicacion=fecha_publicacion,
+                )
+                session.add(precio)
+
+            # Step 4 – mark batch as PUBLICADO
+            archivo.status = CargaStatus.PUBLICADO
+            session.add(archivo)
+
+            # Step 5 – atomic commit
+            await session.commit()
+
+            logger.info(
+                "Publicados %d precios del archivo %s → precios_proveedor",
+                len(filas),
+                archivo_id,
+            )
+            return {"filas_publicadas": len(filas)}
+
+        except Exception:
+            await session.rollback()
+            raise

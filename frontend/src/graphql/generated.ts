@@ -3,6 +3,8 @@ import { gql, type TypedDocumentNode } from "@apollo/client";
 export type SearchMedicamentosQueryVariables = {
   texto: string;
   empresa?: string | null;
+  soloActivos?: boolean | null;
+  formaFarmaceutica?: string | null;
 };
 
 export type SearchMedicamentosQuery = {
@@ -19,6 +21,8 @@ export type SearchMedicamentosQuery = {
     precioEmpaque?: number | null;
     esRegulado: boolean;
     precioMaximoRegulado?: number | null;
+    activo: boolean;
+    estadoCum?: string | null;
   }>;
 };
 
@@ -41,120 +45,9 @@ export type ComparativaPreciosQuery = {
   }>;
 };
 
-export type CargarInvimaMutationVariables = {
-  file: File;
-};
-
-export type CargarInvimaMutation = {
-  cargarMaestroInvima: {
-    id: string;
-    filename: string;
-    status: string;
-  };
-};
-
-// ---------------------------------------------------------------------------
-// Supplier pricing pipeline
-// ---------------------------------------------------------------------------
-
-export type SubirArchivoProveedorMutationVariables = {
-  file: File;
-};
-
-export type SubirArchivoProveedorMutation = {
-  subirArchivoProveedor: {
-    id: string;
-    filename: string;
-    status: string;
-    columnasDetectadas?: string[] | null;
-    mapeoSugerido?: string | null;
-  };
-};
-
-export type MapeoColumnasInput = {
-  cumCode?: string | null;
-  precioUnitario?: string | null;
-  precioUnidad?: string | null;
-  precioPresentacion?: string | null;
-  porcentajeIva?: string | null;
-  descripcion?: string | null;
-  vigenteDesde?: string | null;
-  vigenteHasta?: string | null;
-};
-
-export type ConfirmarMapeoProveedorMutationVariables = {
-  archivoId: string;
-  mapeo: MapeoColumnasInput;
-};
-
-export type ConfirmarMapeoProveedorMutation = {
-  confirmarMapeoProveedor: {
-    id: string;
-    filename: string;
-    status: string;
-    columnasDetectadas?: string[] | null;
-    mapeoSugerido?: string | null;
-  };
-};
-
-export type AprobarStagingFilaMutationVariables = {
-  stagingId: string;
-  idCum: string;
-};
-
-export type AprobarStagingFilaMutation = {
-  aprobarStagingFila: {
-    id: string;
-    filaNumero: number;
-    cumCode?: string | null;
-    precioUnitario?: number | null;
-    precioUnidad?: number | null;
-    precioPresentacion?: number | null;
-    porcentajeIva?: number | null;
-    descripcionRaw?: string | null;
-    estadoHomologacion: string;
-    sugerenciasCum?: string | null;
-    datosRaw: string;
-  };
-};
-
-export type GetStagingFilasQueryVariables = {
-  archivoId: string;
-};
-
-export type GetStagingFilasQuery = {
-  getStagingFilas: Array<{
-    id: string;
-    filaNumero: number;
-    cumCode?: string | null;
-    precioUnitario?: number | null;
-    precioUnidad?: number | null;
-    precioPresentacion?: number | null;
-    porcentajeIva?: number | null;
-    descripcionRaw?: string | null;
-    estadoHomologacion: string;
-    sugerenciasCum?: string | null;
-    datosRaw: string;
-  }>;
-};
-
-export type SugerenciasCUMQueryVariables = {
-  texto: string;
-};
-
-export type SugerenciasCUMQuery = {
-  sugerenciasCum: Array<{
-    idCum: string;
-    nombre: string;
-    score: number;
-    principioActivo?: string | null;
-    laboratorio?: string | null;
-  }>;
-};
-
 export const SearchMedicamentosDocument = gql`
-  query SearchMedicamentos($texto: String!, $empresa: String) {
-    buscarMedicamentos(texto: $texto, empresa: $empresa) {
+  query SearchMedicamentos($texto: String!, $empresa: String, $soloActivos: Boolean, $formaFarmaceutica: String) {
+    buscarMedicamentos(texto: $texto, empresa: $empresa, soloActivos: $soloActivos, formaFarmaceutica: $formaFarmaceutica) {
       id
       nombreLimpio
       distancia
@@ -167,6 +60,8 @@ export const SearchMedicamentosDocument = gql`
       precioEmpaque
       esRegulado
       precioMaximoRegulado
+      activo
+      estadoCum
     }
   }
 ` as TypedDocumentNode<SearchMedicamentosQuery, SearchMedicamentosQueryVariables>;
@@ -188,15 +83,90 @@ export const ComparativaPreciosDocument = gql`
   }
 ` as TypedDocumentNode<ComparativaPreciosQuery, ComparativaPreciosQueryVariables>;
 
-export const CargarInvimaDocument = gql`
-  mutation CargarInvima($file: Upload!) {
-    cargarMaestroInvima(file: $file) {
-      id
-      filename
-      status
-    }
-  }
-` as TypedDocumentNode<CargarInvimaMutation, CargarInvimaMutationVariables>;
+// ---------------------------------------------------------------------------
+// Supplier pricing pipeline
+// ---------------------------------------------------------------------------
+
+export type SubirArchivoProveedorMutationVariables = {
+  file: File;
+};
+
+export type SubirArchivoProveedorMutation = {
+  subirArchivoProveedor: {
+    id: string;
+    filename: string;
+    status: string;
+    columnasDetectadas?: string[] | null;
+    mapeoSugerido?: string | null;
+  };
+};
+
+export type ConfirmarMapeoProveedorMutationVariables = {
+  archivoId: string;
+  cumCode?: string | null;
+  precioUnitario?: string | null;
+  precioUnidad?: string | null;
+  precioPresentacion?: string | null;
+  porcentajeIva?: string | null;
+  descripcion?: string | null;
+  vigentDesde?: string | null;
+  vigenteHasta?: string | null;
+};
+
+export type ConfirmarMapeoProveedorMutation = {
+  confirmarMapeoProveedor: {
+    id: string;
+    filename: string;
+    status: string;
+  };
+};
+
+export type GetStagingFilasQueryVariables = {
+  archivoId: string;
+};
+
+export type GetStagingFilasQuery = {
+  getStagingFilas: Array<{
+    id: string;
+    filaNumero: number;
+    cumCode?: string | null;
+    precioUnitario?: number | null;
+    precioUnidad?: number | null;
+    precioPresentacion?: number | null;
+    porcentajeIva?: number | null;
+    descripcionRaw?: string | null;
+    estadoHomologacion: string;
+    sugerenciasCum?: string | null;
+    datosRaw: string;
+    fechaVigenciaIndefinida: boolean;
+    confianzaScore?: number | null;
+  }>;
+};
+
+export type AprobarStagingFilaMutationVariables = {
+  stagingId: string;
+  idCum: string;
+};
+
+export type AprobarStagingFilaMutation = {
+  aprobarStagingFila: {
+    id: string;
+    estadoHomologacion: string;
+    cumCode?: string | null;
+  };
+};
+
+export type PublicarPreciosProveedorMutationVariables = {
+  archivoId: string;
+};
+
+export type PublicarPreciosProveedorMutation = {
+  publicarPreciosProveedor: {
+    filasPublicadas: number;
+    archivoId: string;
+    status: string;
+  };
+};
 
 export const SubirArchivoProveedorDocument = gql`
   mutation SubirArchivoProveedor($file: Upload!) {
@@ -211,34 +181,36 @@ export const SubirArchivoProveedorDocument = gql`
 ` as TypedDocumentNode<SubirArchivoProveedorMutation, SubirArchivoProveedorMutationVariables>;
 
 export const ConfirmarMapeoProveedorDocument = gql`
-  mutation ConfirmarMapeoProveedor($archivoId: ID!, $mapeo: MapeoColumnasInput!) {
-    confirmarMapeoProveedor(archivoId: $archivoId, mapeo: $mapeo) {
+  mutation ConfirmarMapeoProveedor(
+    $archivoId: ID!
+    $cumCode: String
+    $precioUnitario: String
+    $precioUnidad: String
+    $precioPresentacion: String
+    $porcentajeIva: String
+    $descripcion: String
+    $vigenteDesde: String
+    $vigenteHasta: String
+  ) {
+    confirmarMapeoProveedor(
+      archivoId: $archivoId
+      mapeo: {
+        cumCode: $cumCode
+        precioUnitario: $precioUnitario
+        precioUnidad: $precioUnidad
+        precioPresentacion: $precioPresentacion
+        porcentajeIva: $porcentajeIva
+        descripcion: $descripcion
+        vigenteDesde: $vigenteDesde
+        vigenteHasta: $vigenteHasta
+      }
+    ) {
       id
       filename
       status
-      columnasDetectadas
-      mapeoSugerido
     }
   }
 ` as TypedDocumentNode<ConfirmarMapeoProveedorMutation, ConfirmarMapeoProveedorMutationVariables>;
-
-export const AprobarStagingFilaDocument = gql`
-  mutation AprobarStagingFila($stagingId: ID!, $idCum: String!) {
-    aprobarStagingFila(stagingId: $stagingId, idCum: $idCum) {
-      id
-      filaNumero
-      cumCode
-      precioUnitario
-      precioUnidad
-      precioPresentacion
-      porcentajeIva
-      descripcionRaw
-      estadoHomologacion
-      sugerenciasCum
-      datosRaw
-    }
-  }
-` as TypedDocumentNode<AprobarStagingFilaMutation, AprobarStagingFilaMutationVariables>;
 
 export const GetStagingFilasDocument = gql`
   query GetStagingFilas($archivoId: ID!) {
@@ -254,19 +226,29 @@ export const GetStagingFilasDocument = gql`
       estadoHomologacion
       sugerenciasCum
       datosRaw
+      fechaVigenciaIndefinida
+      confianzaScore
     }
   }
 ` as TypedDocumentNode<GetStagingFilasQuery, GetStagingFilasQueryVariables>;
 
-export const SugerenciasCUMDocument = gql`
-  query SugerenciasCUM($texto: String!) {
-    sugerenciasCum(texto: $texto) {
-      idCum
-      nombre
-      score
-      principioActivo
-      laboratorio
+export const AprobarStagingFilaDocument = gql`
+  mutation AprobarStagingFila($stagingId: ID!, $idCum: String!) {
+    aprobarStagingFila(stagingId: $stagingId, idCum: $idCum) {
+      id
+      estadoHomologacion
+      cumCode
     }
   }
-` as TypedDocumentNode<SugerenciasCUMQuery, SugerenciasCUMQueryVariables>;
+` as TypedDocumentNode<AprobarStagingFilaMutation, AprobarStagingFilaMutationVariables>;
+
+export const PublicarPreciosProveedorDocument = gql`
+  mutation PublicarPreciosProveedor($archivoId: ID!) {
+    publicarPreciosProveedor(archivoId: $archivoId) {
+      filasPublicadas
+      archivoId
+      status
+    }
+  }
+` as TypedDocumentNode<PublicarPreciosProveedorMutation, PublicarPreciosProveedorMutationVariables>;
 

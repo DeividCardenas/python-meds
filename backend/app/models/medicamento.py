@@ -7,7 +7,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import JSON, Column, DateTime, Float, ForeignKey, Index, Integer, Numeric, String, text
+from sqlalchemy import JSON, Boolean, Column, DateTime, Float, ForeignKey, Index, Integer, Numeric, String, text
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlmodel import Field, SQLModel
 
@@ -19,6 +19,7 @@ class CargaStatus(str, Enum):
     PROCESSING = "PROCESSING"
     COMPLETED = "COMPLETED"
     FAILED = "FAILED"
+    PUBLICADO = "PUBLICADO"
 
 
 class Medicamento(SQLModel, table=True):
@@ -42,6 +43,11 @@ class Medicamento(SQLModel, table=True):
     forma_farmaceutica: str | None = Field(default=None, sa_column=Column(String, nullable=True))
     embedding_status: str | None = Field(default=None, sa_column=Column(String, nullable=True))
     embedding: list[float] | None = Field(default=None, sa_column=Column(Vector(EMBEDDING_DIMENSION), nullable=True))
+    # Estado del CUM: valor raw de medicamentos_cum.estadocum (ej. "Vigente", "Vencido")
+    estado_cum: str | None = Field(default=None, sa_column=Column(String, nullable=True, index=True))
+    # Flag desnormalizado: True cuando estadocum es Vigente/Activo, True por defecto para
+    # medicamentos sin id_cum (no vinculados al catálogo INVIMA)
+    activo: bool = Field(default=True, sa_column=Column(Boolean, nullable=False, server_default="true"))
 
 
 class PrecioReferencia(SQLModel, table=True):
@@ -92,13 +98,28 @@ class MedicamentoCUM(SQLModel, table=True):
     producto: str | None = Field(default=None, sa_column=Column(String, nullable=True))
     titular: str | None = Field(default=None, sa_column=Column(String, nullable=True))
     registrosanitario: str | None = Field(default=None, sa_column=Column(String, nullable=True))
+    fechaexpedicion: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
     fechavencimiento: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
+    estadoregistro: str | None = Field(default=None, sa_column=Column(String, nullable=True))
     cantidadcum: float | None = Field(default=None, sa_column=Column(Float, nullable=True))
     descripcioncomercial: str | None = Field(default=None, sa_column=Column(String, nullable=True))
     estadocum: str | None = Field(default=None, sa_column=Column(String, nullable=True, index=True))
+    fechaactivo: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
+    fechainactivo: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
+    muestramedica: str | None = Field(default=None, sa_column=Column(String, nullable=True))
+    unidad: str | None = Field(default=None, sa_column=Column(String, nullable=True))
     atc: str | None = Field(default=None, sa_column=Column(String, nullable=True))
     descripcionatc: str | None = Field(default=None, sa_column=Column(String, nullable=True))
+    viaadministracion: str | None = Field(default=None, sa_column=Column(String, nullable=True))
+    concentracion: str | None = Field(default=None, sa_column=Column(String, nullable=True))
     principioactivo: str | None = Field(default=None, sa_column=Column(String, nullable=True))
+    unidadmedida: str | None = Field(default=None, sa_column=Column(String, nullable=True))
+    cantidad: str | None = Field(default=None, sa_column=Column(String, nullable=True))
+    unidadreferencia: str | None = Field(default=None, sa_column=Column(String, nullable=True))
+    formafarmaceutica: str | None = Field(default=None, sa_column=Column(String, nullable=True))
+    nombrerol: str | None = Field(default=None, sa_column=Column(String, nullable=True))
+    tiporol: str | None = Field(default=None, sa_column=Column(String, nullable=True))
+    modalidad: str | None = Field(default=None, sa_column=Column(String, nullable=True))
 
 
 class CUMSyncLog(SQLModel, table=True):

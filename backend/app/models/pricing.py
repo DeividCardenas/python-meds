@@ -143,10 +143,12 @@ class StagingPrecioProveedor(SQLModel, table=True):
         default="PENDIENTE",
         sa_column=Column(String, nullable=False, index=True),
     )
-    # FK to medicamentos.id once the row has been approved
+    # FK to medicamentos.id once the row has been approved.
+    # NOTE: This is a soft (application-level) reference.
+    # medicamentos lives in genhospi_catalog; no DB-level FK constraint.
     medicamento_id: UUID | None = Field(
         default=None,
-        sa_column=Column(PGUUID(as_uuid=True), ForeignKey("medicamentos.id"), nullable=True),
+        sa_column=Column(PGUUID(as_uuid=True), nullable=True),
     )
 
     # --- Missing-data protocol (Pillar 3) ---
@@ -197,4 +199,88 @@ class StagingPrecioProveedor(SQLModel, table=True):
     sugerencias_cum: list[dict[str, Any]] | None = Field(
         default=None,
         sa_column=Column(JSONB, nullable=True),
+    )
+
+
+class PrecioProveedor(SQLModel, table=True):
+    """
+    Production table for published supplier prices.
+
+    Rows are promoted here from ``staging_precios_proveedor`` once a batch
+    has been reviewed and the user clicks "Publicar al Catálogo".  The full
+    financial columns and traceability back to the originating staging row
+    and upload file are preserved.
+    """
+
+    __tablename__ = "precios_proveedor"
+
+    id: UUID = Field(
+        default_factory=uuid4,
+        sa_column=Column(PGUUID(as_uuid=True), primary_key=True),
+    )
+    # Traceability: FK back to the staging row that originated this record.
+    # Soft reference — no DB-level FK so we can delete staging rows later.
+    staging_id: UUID = Field(
+        sa_column=Column(PGUUID(as_uuid=True), nullable=False, index=True),
+    )
+    # FK to the upload batch
+    archivo_id: UUID = Field(
+        sa_column=Column(
+            PGUUID(as_uuid=True),
+            ForeignKey("proveedor_archivos.id"),
+            nullable=False,
+            index=True,
+        ),
+    )
+    # Soft reference to proveedores (nullable – batch may not have a known supplier)
+    proveedor_id: UUID | None = Field(
+        default=None,
+        sa_column=Column(PGUUID(as_uuid=True), ForeignKey("proveedores.id"), nullable=True, index=True),
+    )
+    # CUM code is mandatory in the production table
+    cum_code: str = Field(sa_column=Column(String, nullable=False, index=True))
+    # Soft reference to genhospi_catalog.medicamentos.id (cross-DB, no FK constraint)
+    medicamento_id: UUID | None = Field(
+        default=None,
+        sa_column=Column(PGUUID(as_uuid=True), nullable=True),
+    )
+    # --- Financial columns ---
+    precio_unitario: Decimal | None = Field(
+        default=None,
+        sa_column=Column(Numeric(12, 2), nullable=True),
+    )
+    precio_unidad: Decimal | None = Field(
+        default=None,
+        sa_column=Column(Numeric(12, 2), nullable=True),
+    )
+    precio_presentacion: Decimal | None = Field(
+        default=None,
+        sa_column=Column(Numeric(12, 2), nullable=True),
+    )
+    porcentaje_iva: Decimal | None = Field(
+        default=None,
+        sa_column=Column(Numeric(5, 4), nullable=True),
+    )
+    # --- Validity dates ---
+    vigente_desde: date | None = Field(
+        default=None,
+        sa_column=Column(Date, nullable=True),
+    )
+    vigente_hasta: date | None = Field(
+        default=None,
+        sa_column=Column(Date, nullable=True),
+    )
+    fecha_vigencia_indefinida: bool = Field(
+        default=False,
+        sa_column=Column(Boolean, nullable=False, server_default="false"),
+    )
+    # --- Confidence score (inherited from staging) ---
+    confianza_score: Decimal | None = Field(
+        default=None,
+        sa_column=Column(Numeric(5, 4), nullable=True),
+    )
+    # Timestamp when this row was promoted to production
+    fecha_publicacion: datetime = Field(
+        default_factory=datetime.utcnow,
+        sa_column=Column(DateTime(timezone=True), nullable=False),
     )

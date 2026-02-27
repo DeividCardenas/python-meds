@@ -29,7 +29,7 @@ services:
 
   backend:
     build: ./backend
-    command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    command: sh -c "alembic upgrade head && alembic -c alembic_pricing.ini upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     environment:
       DATABASE_URL: ${DB_CATALOG_URL:-postgresql+asyncpg://genhospi_admin:genhospi2026@db:5432/genhospi_catalog}
       DB_URL: ${DB_CATALOG_URL:-postgresql+asyncpg://genhospi_admin:genhospi2026@db:5432/genhospi_catalog}
@@ -39,7 +39,7 @@ services:
       CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
       OPENAI_KEY: ${OPENAI_KEY:-}
       SOCRATA_APP_TOKEN: ${SOCRATA_APP_TOKEN:-}
-      CUM_BATCH_SIZE: ${CUM_BATCH_SIZE:-5000}
+      CUM_BATCH_SIZE: ${CUM_BATCH_SIZE:-2000}
       PYTHONPATH: /app
     volumes:
       - ./backend:/app
@@ -65,7 +65,7 @@ services:
       CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
       OPENAI_KEY: ${OPENAI_KEY:-}
       SOCRATA_APP_TOKEN: ${SOCRATA_APP_TOKEN:-}
-      CUM_BATCH_SIZE: ${CUM_BATCH_SIZE:-5000}
+      CUM_BATCH_SIZE: ${CUM_BATCH_SIZE:-2000}
       PYTHONPATH: /app
     volumes:
       - ./backend:/app
@@ -135,8 +135,13 @@ services:
       PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@genhospi.dev}
       PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
       PGADMIN_CONFIG_SERVER_MODE: "False"
+      # Carga el servidor automáticamente al iniciar
+      PGADMIN_SERVER_JSON_FILE: /pgadmin4/servers.json
     ports:
       - "${PGADMIN_PORT:-5050}:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+      - ./docker/pgadmin/servers.json:/pgadmin4/servers.json:ro
     depends_on:
       db:
         condition: service_healthy
@@ -149,3 +154,4 @@ networks:
 
 volumes:
   postgres_data:
+  pgadmin_data:
