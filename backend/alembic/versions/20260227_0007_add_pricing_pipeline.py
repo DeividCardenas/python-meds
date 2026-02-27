@@ -1,7 +1,7 @@
 """add supplier pricing pipeline tables
 
 Revision ID: 20260227_0007
-Revises: 20260225_0006
+Revises: def64bce7a59
 Create Date: 2026-02-27 16:00:00.000000
 """
 
@@ -13,7 +13,7 @@ from sqlalchemy.dialects import postgresql
 
 
 revision = "20260227_0007"
-down_revision = "20260225_0006"
+down_revision = "def64bce7a59"
 branch_labels = None
 depends_on = None
 

@@ -135,8 +135,8 @@ export function CargaProveedor() {
           cumCode: mapping["cum_code"] ?? null,
           precioUnitario: mapping["precio_unitario"] ?? null,
           descripcion: mapping["descripcion"] ?? null,
-          vigentDesde: mapping["vigente_desde"] ?? null,
-          vigentHasta: mapping["vigente_hasta"] ?? null,
+          vigenteDesde: mapping["vigente_desde"] ?? null,
+          vigenteHasta: mapping["vigente_hasta"] ?? null,
         },
       },
     });

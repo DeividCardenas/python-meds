@@ -75,8 +75,8 @@ export type MapeoColumnasInput = {
   cumCode?: string | null;
   precioUnitario?: string | null;
   descripcion?: string | null;
-  vigentDesde?: string | null;
-  vigentHasta?: string | null;
+  vigenteDesde?: string | null;
+  vigenteHasta?: string | null;
 };
 
 export type ConfirmarMapeoProveedorMutationVariables = {

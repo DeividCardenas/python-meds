@@ -32,6 +32,10 @@ class MedicamentoNode:
     forma_farmaceutica: Optional[str]
     registro_invima: Optional[str]
     principio_activo: Optional[str]
+    precio_unitario: Optional[float] = None
+    precio_empaque: Optional[float] = None
+    es_regulado: bool = False
+    precio_maximo_regulado: Optional[float] = None
 
 
 @strawberry.type
@@ -96,6 +100,10 @@ async def _buscar_medicamentos(session, texto: str, empresa: Optional[str]) -> l
             forma_farmaceutica=forma_farmaceutica,
             registro_invima=registro_invima,
             principio_activo=principio_activo,
+            precio_unitario=None,
+            precio_empaque=None,
+            es_regulado=False,
+            precio_maximo_regulado=None,
         )
         for (
             medicamento_id,
@@ -136,6 +144,40 @@ class Query:
                 return None
             status = carga.status.value if isinstance(carga.status, CargaStatus) else str(carga.status)
             return CargaArchivoNode(id=strawberry.ID(str(carga.id)), filename=carga.filename, status=status)
+
+    @strawberry.field
+    async def comparativa_precios(self, principio_activo: str) -> list[MedicamentoNode]:
+        """Return all medications sharing the same principio_activo for price comparison."""
+        from sqlalchemy import func as safunc
+        pa_normalizado = principio_activo.strip().lower()
+        if not pa_normalizado:
+            return []
+        async with AsyncSessionLocal() as session:
+            from app.models.medicamento import Medicamento
+            stmt = (
+                select(Medicamento)
+                .where(safunc.lower(Medicamento.principio_activo) == pa_normalizado)
+                .order_by(Medicamento.nombre_limpio)
+                .limit(50)
+            )
+            medicamentos = (await session.exec(stmt)).all()
+        return [
+            MedicamentoNode(
+                id=strawberry.ID(str(m.id)),
+                nombre_limpio=m.nombre_limpio,
+                distancia=0.0,
+                id_cum=m.id_cum,
+                laboratorio=m.laboratorio,
+                forma_farmaceutica=m.forma_farmaceutica,
+                registro_invima=m.registro_invima,
+                principio_activo=m.principio_activo,
+                precio_unitario=None,
+                precio_empaque=None,
+                es_regulado=False,
+                precio_maximo_regulado=None,
+            )
+            for m in medicamentos
+        ]
 
     @strawberry.field
     async def sugerencias_cum(self, texto: str) -> list[SugerenciaCUMNode]:
