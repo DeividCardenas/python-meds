@@ -167,6 +167,26 @@ class StagingPrecioProveedor(SQLModel, table=True):
         sa_column=Column(Numeric(5, 4), nullable=True),
     )
 
+    # --- Dynamic financial columns (Pillar 5) ---
+    # Dedicated columns for the three pricing dimensions found across suppliers.
+    # All are nullable – not every supplier provides all three.
+    # precio_unitario (already on model) maps to "unit price" generically.
+    # precio_unidad   → explicit "unit of minimum dispensing" price (e.g. Megalabs "Precio UMD")
+    # precio_presentacion → box / presentation price (e.g. Megalabs "Precio Presentacion")
+    # porcentaje_iva  → IVA percentage stored as a fraction (e.g. "19%" → 0.19)
+    precio_unidad: Decimal | None = Field(
+        default=None,
+        sa_column=Column(Numeric(12, 2), nullable=True),
+    )
+    precio_presentacion: Decimal | None = Field(
+        default=None,
+        sa_column=Column(Numeric(12, 2), nullable=True),
+    )
+    porcentaje_iva: Decimal | None = Field(
+        default=None,
+        sa_column=Column(Numeric(5, 4), nullable=True),
+    )
+
     # --- JSONB vaults ---
     # Complete original row exactly as read from the supplier file
     datos_raw: dict[str, Any] = Field(

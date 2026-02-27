@@ -74,6 +74,9 @@ export type SubirArchivoProveedorMutation = {
 export type MapeoColumnasInput = {
   cumCode?: string | null;
   precioUnitario?: string | null;
+  precioUnidad?: string | null;
+  precioPresentacion?: string | null;
+  porcentajeIva?: string | null;
   descripcion?: string | null;
   vigenteDesde?: string | null;
   vigenteHasta?: string | null;
@@ -105,6 +108,9 @@ export type AprobarStagingFilaMutation = {
     filaNumero: number;
     cumCode?: string | null;
     precioUnitario?: number | null;
+    precioUnidad?: number | null;
+    precioPresentacion?: number | null;
+    porcentajeIva?: number | null;
     descripcionRaw?: string | null;
     estadoHomologacion: string;
     sugerenciasCum?: string | null;
@@ -122,6 +128,9 @@ export type GetStagingFilasQuery = {
     filaNumero: number;
     cumCode?: string | null;
     precioUnitario?: number | null;
+    precioUnidad?: number | null;
+    precioPresentacion?: number | null;
+    porcentajeIva?: number | null;
     descripcionRaw?: string | null;
     estadoHomologacion: string;
     sugerenciasCum?: string | null;
@@ -220,6 +229,9 @@ export const AprobarStagingFilaDocument = gql`
       filaNumero
       cumCode
       precioUnitario
+      precioUnidad
+      precioPresentacion
+      porcentajeIva
       descripcionRaw
       estadoHomologacion
       sugerenciasCum
@@ -235,6 +247,9 @@ export const GetStagingFilasDocument = gql`
       filaNumero
       cumCode
       precioUnitario
+      precioUnidad
+      precioPresentacion
+      porcentajeIva
       descripcionRaw
       estadoHomologacion
       sugerenciasCum
