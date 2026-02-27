@@ -37,3 +37,59 @@ mutation CargarInvima($file: Upload!) {
     status
   }
 }
+
+mutation SubirArchivoProveedor($file: Upload!) {
+  subirArchivoProveedor(file: $file) {
+    id
+    filename
+    status
+    columnasDetectadas
+    mapeoSugerido
+  }
+}
+
+mutation ConfirmarMapeoProveedor($archivoId: ID!, $mapeo: MapeoColumnasInput!) {
+  confirmarMapeoProveedor(archivoId: $archivoId, mapeo: $mapeo) {
+    id
+    filename
+    status
+    columnasDetectadas
+    mapeoSugerido
+  }
+}
+
+mutation AprobarStagingFila($stagingId: ID!, $idCum: String!) {
+  aprobarStagingFila(stagingId: $stagingId, idCum: $idCum) {
+    id
+    filaNúmero: filaNumero
+    cumCode
+    precioUnitario
+    descripcionRaw
+    estadoHomologacion
+    sugerenciasCum
+    datosRaw
+  }
+}
+
+query GetStagingFilas($archivoId: ID!) {
+  getStagingFilas(archivoId: $archivoId) {
+    id
+    filaNumero
+    cumCode
+    precioUnitario
+    descripcionRaw
+    estadoHomologacion
+    sugerenciasCum
+    datosRaw
+  }
+}
+
+query SugerenciasCUM($texto: String!) {
+  sugerenciasCum(texto: $texto) {
+    idCum
+    nombre
+    score
+    principioActivo
+    laboratorio
+  }
+}

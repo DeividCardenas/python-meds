@@ -17,6 +17,7 @@ from app.core.db import create_task_session_factory
 from app.models.medicamento import CargaArchivo, CargaStatus, Medicamento, PrecioReferencia
 from app.services.cum_socrata_service import sincronizar_catalogos_cum
 from app.services.invima_service import procesar_maestro_invima
+from app.services.pricing_service import procesar_archivo_proveedor
 
 
 celery_app = Celery(
@@ -386,3 +387,36 @@ def task_sincronizar_cum() -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001
         logger.exception("Error en sincronización mensual de catálogos CUM: %s", exc)
         raise
+
+
+async def _procesar_archivo_proveedor_async(
+    archivo_id: str, file_path: str, mapeo: dict[str, str]
+) -> dict[str, Any]:
+    task_engine, session_factory = create_task_session_factory()
+    try:
+        return await procesar_archivo_proveedor(
+            archivo_id=archivo_id,
+            file_path=file_path,
+            mapeo=mapeo,
+            session_factory=session_factory,
+        )
+    finally:
+        await task_engine.dispose()
+
+
+@celery_app.task(name="task_procesar_archivo_proveedor")
+def task_procesar_archivo_proveedor(
+    archivo_id: str, file_path: str, mapeo: dict[str, str]
+) -> dict[str, Any]:
+    """
+    Tarea Celery para procesar un archivo de lista de precios de proveedor.
+    Utiliza el mapeo de columnas confirmado por el usuario para extraer los
+    campos estándar e insertar las filas en staging con vault JSONB completo.
+    """
+    try:
+        return _run_async_safely(_procesar_archivo_proveedor_async(archivo_id, file_path, mapeo))
+    except Exception as exc:  # noqa: BLE001
+        _mark_failed(archivo_id, exc)
+        raise
+    finally:
+        _cleanup_temp_file(file_path)
