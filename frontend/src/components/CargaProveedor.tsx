@@ -1,4 +1,4 @@
-import { useState, type DragEvent, type FormEvent } from "react";
+import { useState, useEffect, type DragEvent, type FormEvent } from "react";
 import { useMutation, useQuery } from "@apollo/client";
 
 import {
@@ -18,7 +18,10 @@ import {
 
 const STANDARD_FIELDS: { key: string; label: string; description: string }[] = [
   { key: "cum_code", label: "Código CUM", description: "Identificador único de medicamento" },
-  { key: "precio_unitario", label: "Precio Unitario", description: "Precio por unidad de dispensación" },
+  { key: "precio_unitario", label: "Precio Unitario (genérico)", description: "Precio por unidad – columna genérica de precio" },
+  { key: "precio_unidad", label: "Precio Unidad Mínima", description: "Precio de dispensación mínima (ej. Megalabs 'Precio UMD', La Sante 'PRECIO UNIDAD MINIMA')" },
+  { key: "precio_presentacion", label: "Precio Presentación / Caja", description: "Precio por presentación/caja (ej. Megalabs 'Precio Presentacion')" },
+  { key: "porcentaje_iva", label: "IVA (%)", description: "Porcentaje de IVA aplicado al producto (ej. '19%'). Omitir si el proveedor no lo indica." },
   { key: "descripcion", label: "Descripción / Nombre", description: "Nombre o descripción del producto" },
   { key: "vigente_desde", label: "Vigente Desde", description: "Fecha de inicio de vigencia del precio" },
   { key: "vigente_hasta", label: "Vigente Hasta", description: "Fecha de fin de vigencia del precio" },
@@ -60,6 +63,8 @@ export function CargaProveedor() {
   const [mapping, setMapping] = useState<Record<string, string>>({});
   const [approvingId, setApprovingId] = useState<string | null>(null);
   const [manualCumInputs, setManualCumInputs] = useState<Record<string, string>>({});
+  // isProcessing: true while the Celery ETL task is running after confirmarMapeo
+  const [isProcessing, setIsProcessing] = useState(false);
 
   const [subirArchivo, { loading: loadingUpload, error: uploadError }] = useMutation<
     SubirArchivoProveedorMutation,
@@ -76,7 +81,7 @@ export function CargaProveedor() {
     AprobarStagingFilaMutationVariables
   >(AprobarStagingFilaDocument);
 
-  const { data: stagingData, loading: loadingStaging, refetch: refetchStaging } = useQuery<
+  const { data: stagingData, loading: loadingStaging, refetch: refetchStaging, startPolling, stopPolling } = useQuery<
     GetStagingFilasQuery,
     GetStagingFilasQueryVariables
   >(GetStagingFilasDocument, {
@@ -88,6 +93,14 @@ export function CargaProveedor() {
   const filas = stagingData?.getStagingFilas ?? [];
   const filasConCum = filas.filter((f) => f.cumCode);
   const filasSinCum = filas.filter((f) => !f.cumCode || f.estadoHomologacion === "PENDIENTE");
+
+  // Stop polling once rows appear after the Celery ETL task finishes
+  useEffect(() => {
+    if (isProcessing && filas.length > 0) {
+      stopPolling();
+      setIsProcessing(false);
+    }
+  }, [isProcessing, filas.length, stopPolling, setIsProcessing]);
 
   // -------------------------------------------------------------------------
   // Handlers
@@ -134,13 +147,20 @@ export function CargaProveedor() {
         mapeo: {
           cumCode: mapping["cum_code"] ?? null,
           precioUnitario: mapping["precio_unitario"] ?? null,
+          precioUnidad: mapping["precio_unidad"] ?? null,
+          precioPresentacion: mapping["precio_presentacion"] ?? null,
+          porcentajeIva: mapping["porcentaje_iva"] ?? null,
           descripcion: mapping["descripcion"] ?? null,
           vigenteDesde: mapping["vigente_desde"] ?? null,
           vigenteHasta: mapping["vigente_hasta"] ?? null,
         },
       },
     });
+    setIsProcessing(true);
     setStep("review");
+    // Start polling every 2 s so the UI refreshes automatically when the
+    // Celery ETL task finishes inserting staging rows.
+    startPolling(2000);
   };
 
   const onAprobarFila = async (fila: StagingFila, cumCode: string) => {
@@ -326,7 +346,18 @@ export function CargaProveedor() {
       {/* ---------------------------------------------------------------- */}
       {step === "review" ? (
         <div className="space-y-6">
-          {loadingStaging ? (
+          {isProcessing ? (
+            <div className="flex items-center gap-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3">
+              <svg className="h-5 w-5 animate-spin text-blue-600" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+              </svg>
+              <p className="text-sm font-medium text-blue-700">
+                Procesando archivo… las filas aparecerán automáticamente en cuanto el trabajador termine.
+              </p>
+            </div>
+          ) : null}
+          {loadingStaging && !isProcessing ? (
             <p className="text-sm text-slate-500">Cargando filas de staging...</p>
           ) : (
             <>
@@ -482,6 +513,8 @@ export function CargaProveedor() {
               <button
                 type="button"
                 onClick={() => {
+                  stopPolling();
+                  setIsProcessing(false);
                   setStep("upload");
                   setFile(null);
                   setArchivoId(null);

@@ -8,6 +8,7 @@ import polars as pl
 from app.services.pricing_service import (
     _parse_date,
     _parse_decimal,
+    _parse_percentage,
     detectar_columnas,
     sugerir_mapeo_automatico,
 )
@@ -111,6 +112,42 @@ class PricingServiceTests(unittest.TestCase):
     def test_sugerencia_sin_coincidencias(self):
         mapping = sugerir_mapeo_automatico(["Columna1", "Columna2"])
         self.assertEqual(mapping, {})
+
+    # -----------------------------------------------------------------------
+    # _parse_percentage
+    # -----------------------------------------------------------------------
+    def test_parse_percentage_percent_string(self):
+        self.assertEqual(_parse_percentage("19%"), Decimal("0.1900"))
+
+    def test_parse_percentage_float_string(self):
+        self.assertEqual(_parse_percentage("0.19"), Decimal("0.1900"))
+
+    def test_parse_percentage_integer_string(self):
+        self.assertEqual(_parse_percentage("19"), Decimal("0.1900"))
+
+    def test_parse_percentage_zero(self):
+        self.assertEqual(_parse_percentage("0%"), Decimal("0.0000"))
+
+    def test_parse_percentage_none_returns_none(self):
+        self.assertIsNone(_parse_percentage(None))
+
+    def test_parse_percentage_invalid_returns_none(self):
+        self.assertIsNone(_parse_percentage("N/A"))
+
+    # -----------------------------------------------------------------------
+    # sugerir_mapeo_automatico – new financial columns
+    # -----------------------------------------------------------------------
+    def test_sugerencia_precio_unidad_minima(self):
+        mapping = sugerir_mapeo_automatico(["CUM", "NOMBRE", "PRECIO UNIDAD MINIMA"])
+        self.assertEqual(mapping.get("precio_unidad"), "PRECIO UNIDAD MINIMA")
+
+    def test_sugerencia_precio_presentacion(self):
+        mapping = sugerir_mapeo_automatico(["CUM", "Precio Presentacion", "Precio UMD"])
+        self.assertEqual(mapping.get("precio_presentacion"), "Precio Presentacion")
+
+    def test_sugerencia_porcentaje_iva(self):
+        mapping = sugerir_mapeo_automatico(["CUM", "Descripcion", "Precio", "IVA"])
+        self.assertEqual(mapping.get("porcentaje_iva"), "IVA")
 
 
 if __name__ == "__main__":

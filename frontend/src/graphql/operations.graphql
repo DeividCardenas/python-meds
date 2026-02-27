@@ -64,6 +64,9 @@ mutation AprobarStagingFila($stagingId: ID!, $idCum: String!) {
     filaNúmero: filaNumero
     cumCode
     precioUnitario
+    precioUnidad
+    precioPresentacion
+    porcentajeIva
     descripcionRaw
     estadoHomologacion
     sugerenciasCum
@@ -77,6 +80,9 @@ query GetStagingFilas($archivoId: ID!) {
     filaNumero
     cumCode
     precioUnitario
+    precioUnidad
+    precioPresentacion
+    porcentajeIva
     descripcionRaw
     estadoHomologacion
     sugerenciasCum

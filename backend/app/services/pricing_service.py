@@ -24,13 +24,29 @@ logger = logging.getLogger(__name__)
 AUTO_APPROVE_THRESHOLD: float = 0.99
 
 # Standard field names that the column mapper understands
-STANDARD_FIELDS = ["cum_code", "precio_unitario", "descripcion", "vigente_desde", "vigente_hasta"]
+STANDARD_FIELDS = [
+    "cum_code",
+    "precio_unitario",
+    "precio_unidad",
+    "precio_presentacion",
+    "porcentaje_iva",
+    "descripcion",
+    "vigente_desde",
+    "vigente_hasta",
+]
 
 # Heuristic patterns for auto-detecting which supplier column maps to which
 # standard field.  Each pattern is tried against the *lower-cased* column name.
 _AUTO_DETECT_PATTERNS: dict[str, list[str]] = {
     "cum_code": [r"cum", r"codigo\s*cum", r"c[oó]digo.*cum", r"axapta"],  # "Código Axapta" is used by MEGALABS for CUM-like product codes
-    "precio_unitario": [r"precio.*unit", r"unit.*price", r"precio\s*umd", r"precio"],
+    # precio_unidad matches explicit unit/UMD price columns (Megalabs "Precio UMD", La Sante "PRECIO UNIDAD MINIMA")
+    "precio_unidad": [r"precio\s*umd", r"precio.*unidad\s*m[ií]nima"],
+    # precio_presentacion matches box/presentation price columns
+    "precio_presentacion": [r"precio.*presentaci[oó]n", r"precio.*caja", r"precio.*empaque", r"precio.*presentac"],
+    # porcentaje_iva matches IVA/tax columns
+    "porcentaje_iva": [r"iva", r"impuesto.*valor.*agregado", r"tax"],
+    # precio_unitario is the generic fallback for any remaining price column
+    "precio_unitario": [r"precio.*unit", r"unit.*price", r"precio"],
     "descripcion": [r"descripci[oó]n", r"producto", r"nombre", r"description"],
     "vigente_desde": [r"vigente?\s*desde", r"valid\s*from", r"fecha\s*inicio"],
     "vigente_hasta": [r"vigente?\s*hasta", r"valid\s*to", r"fecha\s*fin", r"fecha\s*vencimiento"],
@@ -103,6 +119,35 @@ def _parse_decimal(value: Any) -> Decimal | None:
         return Decimal(raw)
     except InvalidOperation:
         return None
+
+
+def _parse_percentage(value: Any) -> Decimal | None:
+    """
+    Parse a percentage value into a decimal fraction.
+
+    Accepts strings like "19%", "19.0%", "0.19", "19", etc.
+    Returns a value in [0, 1] range (e.g. "19%" → Decimal("0.19")).
+    Returns None when the value is absent or unparseable.
+    """
+    if value is None:
+        return None
+    raw = str(value).strip().replace(" ", "")
+    if not raw:
+        return None
+    # Strip trailing percent sign and convert to fraction
+    is_percent = raw.endswith("%")
+    numeric_str = raw.rstrip("%").replace(",", ".")
+    try:
+        parsed = Decimal(numeric_str)
+    except InvalidOperation:
+        return None
+    # If the value was expressed as "19%" (percent sign) or as a bare integer/
+    # float > 1 (e.g. "19"), treat it as a percentage to convert to fraction.
+    # Assumption: IVA rates in this domain are always ≤ 100% (≤ 1 after conversion),
+    # so any parsed value > 1 is unambiguously a percentage, not a fraction.
+    if is_percent or parsed > Decimal("1"):
+        return (parsed / Decimal("100")).quantize(Decimal("0.0001"))
+    return parsed.quantize(Decimal("0.0001"))
 
 
 async def buscar_sugerencias_cum(
@@ -205,6 +250,9 @@ async def procesar_archivo_proveedor(
 
         cum_col = mapeo.get("cum_code")
         precio_col = mapeo.get("precio_unitario")
+        precio_unidad_col = mapeo.get("precio_unidad")
+        precio_presentacion_col = mapeo.get("precio_presentacion")
+        porcentaje_iva_col = mapeo.get("porcentaje_iva")
         desc_col = mapeo.get("descripcion")
         desde_col = mapeo.get("vigente_desde")
         hasta_col = mapeo.get("vigente_hasta")
@@ -232,6 +280,9 @@ async def procesar_archivo_proveedor(
                     cum_code = raw_cum
 
             precio = _parse_decimal(row.get(precio_col)) if precio_col else None
+            precio_unidad = _parse_decimal(row.get(precio_unidad_col)) if precio_unidad_col else None
+            precio_presentacion = _parse_decimal(row.get(precio_presentacion_col)) if precio_presentacion_col else None
+            porcentaje_iva = _parse_percentage(row.get(porcentaje_iva_col)) if porcentaje_iva_col else None
 
             # Prefer the Polars-normalized description for matching; fall back
             # to the raw column when the normalizer column is not available.
@@ -268,6 +319,9 @@ async def procesar_archivo_proveedor(
                     "fila_numero": idx + 1,
                     "cum_code": cum_code,
                     "precio_unitario": precio,
+                    "precio_unidad": precio_unidad,
+                    "precio_presentacion": precio_presentacion,
+                    "porcentaje_iva": porcentaje_iva,
                     "descripcion_raw": descripcion,
                     "vigente_desde": vigente_desde,
                     "vigente_hasta": vigente_hasta,
@@ -307,6 +361,9 @@ async def procesar_archivo_proveedor(
                         fila_numero=row["fila_numero"],
                         cum_code=row["cum_code"],
                         precio_unitario=row["precio_unitario"],
+                        precio_unidad=row["precio_unidad"],
+                        precio_presentacion=row["precio_presentacion"],
+                        porcentaje_iva=row["porcentaje_iva"],
                         descripcion_raw=row["descripcion_raw"],
                         vigente_desde=row["vigente_desde"],
                         vigente_hasta=row["vigente_hasta"],

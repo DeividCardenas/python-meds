@@ -74,6 +74,9 @@ class StagingFilaNode:
     fila_numero: int
     cum_code: Optional[str]
     precio_unitario: Optional[float]
+    precio_unidad: Optional[float]
+    precio_presentacion: Optional[float]
+    porcentaje_iva: Optional[float]
     descripcion_raw: Optional[str]
     estado_homologacion: str
     sugerencias_cum: Optional[str]  # JSON-encoded list
@@ -88,6 +91,9 @@ class StagingFilaNode:
 class MapeoColumnasInput:
     cum_code: Optional[str] = None
     precio_unitario: Optional[str] = None
+    precio_unidad: Optional[str] = None
+    precio_presentacion: Optional[str] = None
+    porcentaje_iva: Optional[str] = None
     descripcion: Optional[str] = None
     vigente_desde: Optional[str] = None
     vigente_hasta: Optional[str] = None
@@ -221,6 +227,9 @@ class Query:
                 fila_numero=fila.fila_numero,
                 cum_code=fila.cum_code,
                 precio_unitario=float(fila.precio_unitario) if fila.precio_unitario is not None else None,
+                precio_unidad=float(fila.precio_unidad) if fila.precio_unidad is not None else None,
+                precio_presentacion=float(fila.precio_presentacion) if fila.precio_presentacion is not None else None,
+                porcentaje_iva=float(fila.porcentaje_iva) if fila.porcentaje_iva is not None else None,
                 descripcion_raw=fila.descripcion_raw,
                 estado_homologacion=fila.estado_homologacion,
                 sugerencias_cum=json.dumps(fila.sugerencias_cum) if fila.sugerencias_cum else None,
@@ -393,6 +402,12 @@ class Mutation:
             mapeo_dict["cum_code"] = mapeo.cum_code
         if mapeo.precio_unitario:
             mapeo_dict["precio_unitario"] = mapeo.precio_unitario
+        if mapeo.precio_unidad:
+            mapeo_dict["precio_unidad"] = mapeo.precio_unidad
+        if mapeo.precio_presentacion:
+            mapeo_dict["precio_presentacion"] = mapeo.precio_presentacion
+        if mapeo.porcentaje_iva:
+            mapeo_dict["porcentaje_iva"] = mapeo.porcentaje_iva
         if mapeo.descripcion:
             mapeo_dict["descripcion"] = mapeo.descripcion
         if mapeo.vigente_desde:
@@ -454,6 +469,9 @@ class Mutation:
             fila_numero=fila.fila_numero,
             cum_code=fila.cum_code,
             precio_unitario=float(fila.precio_unitario) if fila.precio_unitario is not None else None,
+            precio_unidad=float(fila.precio_unidad) if fila.precio_unidad is not None else None,
+            precio_presentacion=float(fila.precio_presentacion) if fila.precio_presentacion is not None else None,
+            porcentaje_iva=float(fila.porcentaje_iva) if fila.porcentaje_iva is not None else None,
             descripcion_raw=fila.descripcion_raw,
             estado_homologacion=fila.estado_homologacion,
             sugerencias_cum=json.dumps(fila.sugerencias_cum) if fila.sugerencias_cum else None,
