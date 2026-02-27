@@ -5,7 +5,7 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-genhospi_catalog}
       POSTGRES_USER: ${POSTGRES_USER:-genhospi_admin}
       # SECURITY: always override this via .env in any real environment
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-GenhospiSecure2026!}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-genhospi2026}
     ports:
       # Host port 5433 → container port 5432 to avoid local conflicts
       - "${POSTGRES_PORT:-5433}:5432"
@@ -31,10 +31,10 @@ services:
     build: ./backend
     command: sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
     environment:
-      DATABASE_URL: ${DB_CATALOG_URL:-postgresql+asyncpg://genhospi_admin:GenhospiSecure2026@db:5432/genhospi_catalog}
-      DB_URL: ${DB_CATALOG_URL:-postgresql+asyncpg://genhospi_admin:GenhospiSecure2026@db:5432/genhospi_catalog}
-      DB_CATALOG_URL: ${DB_CATALOG_URL:-postgresql+asyncpg://genhospi_admin:GenhospiSecure2026@db:5432/genhospi_catalog}
-      DB_PRICING_URL: ${DB_PRICING_URL:-postgresql+asyncpg://genhospi_admin:GenhospiSecure2026@db:5432/genhospi_pricing}
+      DATABASE_URL: ${DB_CATALOG_URL:-postgresql+asyncpg://genhospi_admin:genhospi2026@db:5432/genhospi_catalog}
+      DB_URL: ${DB_CATALOG_URL:-postgresql+asyncpg://genhospi_admin:genhospi2026@db:5432/genhospi_catalog}
+      DB_CATALOG_URL: ${DB_CATALOG_URL:-postgresql+asyncpg://genhospi_admin:genhospi2026@db:5432/genhospi_catalog}
+      DB_PRICING_URL: ${DB_PRICING_URL:-postgresql+asyncpg://genhospi_admin:genhospi2026@db:5432/genhospi_pricing}
       CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
       CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
       OPENAI_KEY: ${OPENAI_KEY:-}
@@ -57,10 +57,10 @@ services:
     build: ./backend
     command: sh -c "celery -A app.worker.tasks.celery_app worker --loglevel=info"
     environment:
-      DATABASE_URL: ${DB_CATALOG_URL:-postgresql+asyncpg://genhospi_admin:GenhospiSecure2026@db:5432/genhospi_catalog}
-      DB_URL: ${DB_CATALOG_URL:-postgresql+asyncpg://genhospi_admin:GenhospiSecure2026@db:5432/genhospi_catalog}
-      DB_CATALOG_URL: ${DB_CATALOG_URL:-postgresql+asyncpg://genhospi_admin:GenhospiSecure2026@db:5432/genhospi_catalog}
-      DB_PRICING_URL: ${DB_PRICING_URL:-postgresql+asyncpg://genhospi_admin:GenhospiSecure2026@db:5432/genhospi_pricing}
+      DATABASE_URL: ${DB_CATALOG_URL:-postgresql+asyncpg://genhospi_admin:genhospi2026@db:5432/genhospi_catalog}
+      DB_URL: ${DB_CATALOG_URL:-postgresql+asyncpg://genhospi_admin:genhospi2026@db:5432/genhospi_catalog}
+      DB_CATALOG_URL: ${DB_CATALOG_URL:-postgresql+asyncpg://genhospi_admin:genhospi2026@db:5432/genhospi_catalog}
+      DB_PRICING_URL: ${DB_PRICING_URL:-postgresql+asyncpg://genhospi_admin:genhospi2026@db:5432/genhospi_pricing}
       CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
       CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
       OPENAI_KEY: ${OPENAI_KEY:-}
@@ -126,6 +126,20 @@ services:
     depends_on:
       - backend
       - influxdb
+    networks:
+      - meds-network
+
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    environment:
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_EMAIL:-admin@genhospi.dev}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_PASSWORD:-admin}
+      PGADMIN_CONFIG_SERVER_MODE: "False"
+    ports:
+      - "${PGADMIN_PORT:-5050}:80"
+    depends_on:
+      db:
+        condition: service_healthy
     networks:
       - meds-network
 
