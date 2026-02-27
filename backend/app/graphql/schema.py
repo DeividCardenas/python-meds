@@ -19,6 +19,7 @@ from app.services.pricing_service import (
     sugerir_mapeo_automatico,
     buscar_sugerencias_cum,
 )
+from app.services.supplier_detector import detectar_proveedor
 from app.worker.tasks import task_procesar_archivo, task_procesar_invima, task_procesar_archivo_proveedor
 
 
@@ -77,6 +78,10 @@ class StagingFilaNode:
     estado_homologacion: str
     sugerencias_cum: Optional[str]  # JSON-encoded list
     datos_raw: str  # JSON-encoded dict
+    # Pillar 3: missing-date flag
+    fecha_vigencia_indefinida: bool = False
+    # Pillar 4: normalised confidence score ∈ [0,1]
+    confianza_score: Optional[float] = None
 
 
 @strawberry.input
@@ -220,6 +225,8 @@ class Query:
                 estado_homologacion=fila.estado_homologacion,
                 sugerencias_cum=json.dumps(fila.sugerencias_cum) if fila.sugerencias_cum else None,
                 datos_raw=json.dumps(fila.datos_raw),
+                fecha_vigencia_indefinida=bool(fila.fecha_vigencia_indefinida),
+                confianza_score=float(fila.confianza_score) if fila.confianza_score is not None else None,
             )
             for fila in filas
         ]
@@ -326,16 +333,35 @@ class Mutation:
         Step 1 of the supplier ETL: upload the price-list file.
         Returns the detected column headers and an auto-suggested mapping
         so the user can review and adjust in the frontend.
+
+        Pillar 2: The supplier is also auto-identified from the filename and
+        header fingerprint; the detected ``proveedor_id`` is persisted when a
+        matching ``Proveedor`` record exists in the database.
         """
         archivo, stored_path = await _guardar_archivo_proveedor(file)
         columnas = detectar_columnas(str(stored_path))
         mapeo_sugerido = sugerir_mapeo_automatico(columnas)
+
+        # Pillar 2 – Auto-detect supplier from filename + column fingerprint
+        deteccion = detectar_proveedor(archivo.filename, columnas)
 
         async with AsyncSessionLocal() as session:
             db_archivo = await session.get(ProveedorArchivo, archivo.id)
             if db_archivo:
                 db_archivo.columnas_detectadas = columnas
                 db_archivo.mapeo_columnas = mapeo_sugerido
+
+                # Resolve proveedor_id when the detected supplier exists in DB
+                if deteccion.proveedor_codigo:
+                    from app.models.pricing import Proveedor
+                    proveedor = (
+                        await session.exec(
+                            select(Proveedor).where(Proveedor.codigo == deteccion.proveedor_codigo)
+                        )
+                    ).first()
+                    if proveedor:
+                        db_archivo.proveedor_id = proveedor.id
+
                 session.add(db_archivo)
                 await session.commit()
 
@@ -432,6 +458,8 @@ class Mutation:
             estado_homologacion=fila.estado_homologacion,
             sugerencias_cum=json.dumps(fila.sugerencias_cum) if fila.sugerencias_cum else None,
             datos_raw=json.dumps(fila.datos_raw),
+            fecha_vigencia_indefinida=bool(fila.fecha_vigencia_indefinida),
+            confianza_score=float(fila.confianza_score) if fila.confianza_score is not None else None,
         )
 
 

@@ -15,8 +15,13 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.medicamento import CargaStatus, Medicamento
 from app.models.pricing import ProveedorArchivo, StagingPrecioProveedor
+from app.services.normalizer import normalize_dataframe_column, normalize_pharma_text
+from app.services.supplier_detector import detectar_proveedor
 
 logger = logging.getLogger(__name__)
+
+# Confidence threshold above which a match is auto-approved without human review
+AUTO_APPROVE_THRESHOLD: float = 0.99
 
 # Standard field names that the column mapper understands
 STANDARD_FIELDS = ["cum_code", "precio_unitario", "descripcion", "vigente_desde", "vigente_hasta"]
@@ -109,15 +114,17 @@ async def buscar_sugerencias_cum(
     Return up to *limite* CUM code suggestions for the given free-text
     description using PostgreSQL full-text search with trigram ranking.
     Leverages the GIN trgm index on ``medicamentos.nombre_limpio``.
+
+    The input text is first normalized via the Polars-powered
+    :func:`~app.services.normalizer.normalize_pharma_text` pipeline so that
+    pharmaceutical noise (packaging, form suffixes, accent variations) does
+    not reduce recall.
     """
     if not texto or not texto.strip():
         return []
 
-    # Normalise text the same way the search service does
-    normalized = re.sub(r"([0-9])([A-Za-zÁÉÍÓÚÜÑáéíóúüñ])", r"\1 \2", texto)
-    normalized = re.sub(r"([A-Za-zÁÉÍÓÚÜÑáéíóúüñ])([0-9])", r"\1 \2", normalized)
-    normalized = re.sub(r"[^0-9A-Za-zÁÉÍÓÚÜÑáéíóúüñ]+", " ", normalized).strip().lower()
-
+    # Pillar 1: Polars-powered normalization before hitting the DB
+    normalized = normalize_pharma_text(texto)
     if not normalized:
         return []
 
@@ -151,7 +158,8 @@ async def buscar_sugerencias_cum(
             "nombre": row.nombre_limpio,
             "principio_activo": row.principio_activo,
             "laboratorio": row.laboratorio,
-            "score": float(row.rank) + float(row.similarity),
+            # Pillar 4: similarity score ∈ [0,1] used as confidence signal
+            "score": float(row.similarity),
         }
         for row in rows
         if row.id_cum
@@ -168,9 +176,16 @@ async def procesar_archivo_proveedor(
     ETL pipeline for a supplier price file.
 
     1. Reads the file using the confirmed *mapeo* (standard_field → column_name).
-    2. Extracts core business fields from each row.
-    3. For rows without a CUM code, runs fuzzy CUM resolution.
-    4. Inserts everything into ``staging_precios_proveedor`` with the full
+    2. Applies Polars-powered text normalization (Pillar 1) to descriptions.
+    3. Extracts core business fields from each row.
+    4. For rows without a CUM code, runs fuzzy CUM resolution.
+    5. Pillar 3 – Missing Data Protocol: when validity dates are absent the
+       row is flagged ``fecha_vigencia_indefinida=True`` instead of raising
+       an error, treating the price as having an open-ended validity period.
+    6. Pillar 4 – Confidence scoring: rows whose best similarity score
+       exceeds ``AUTO_APPROVE_THRESHOLD`` are auto-approved (estado_homologacion
+       set to "APROBADO") without human review.
+    7. Inserts everything into ``staging_precios_proveedor`` with the full
        raw row stored in the JSONB vault.
 
     Returns a summary dict with totals.
@@ -187,13 +202,22 @@ async def procesar_archivo_proveedor(
 
     try:
         df = _read_dataframe(file_path)
-        rows_dicts = df.to_dicts()
 
         cum_col = mapeo.get("cum_code")
         precio_col = mapeo.get("precio_unitario")
         desc_col = mapeo.get("descripcion")
         desde_col = mapeo.get("vigente_desde")
         hasta_col = mapeo.get("vigente_hasta")
+
+        # Pillar 1: Apply Polars normalizer to the description column upfront
+        # so every subsequent operation works on clean text.
+        if desc_col and desc_col in df.columns:
+            df = normalize_dataframe_column(df, desc_col)
+            desc_normalized_col = f"{desc_col}_normalized"
+        else:
+            desc_normalized_col = None
+
+        rows_dicts = df.to_dicts()
 
         staging_rows: list[dict[str, Any]] = []
 
@@ -208,13 +232,34 @@ async def procesar_archivo_proveedor(
                     cum_code = raw_cum
 
             precio = _parse_decimal(row.get(precio_col)) if precio_col else None
-            descripcion = str(row[desc_col]).strip() if desc_col and row.get(desc_col) else None
+
+            # Prefer the Polars-normalized description for matching; fall back
+            # to the raw column when the normalizer column is not available.
+            if desc_normalized_col and row.get(desc_normalized_col):
+                descripcion = str(row[desc_normalized_col]).strip() or None
+            elif desc_col and row.get(desc_col):
+                descripcion = str(row[desc_col]).strip() or None
+            else:
+                descripcion = None
+
+            # Pillar 3 – Missing Data Protocol
+            # When validity date columns are not mapped OR the values are
+            # absent/unparseable, set fecha_vigencia_indefinida=True and store
+            # None for the date fields rather than failing the row.
             vigente_desde = _parse_date(row.get(desde_col)) if desde_col else None
             vigente_hasta = _parse_date(row.get(hasta_col)) if hasta_col else None
+            fecha_vigencia_indefinida = vigente_desde is None and vigente_hasta is None
 
             # Skip completely empty rows
             if not cum_code and not precio and not descripcion:
                 continue
+
+            # Pillar 4 – Confidence scoring
+            # Rows with a direct CUM code are treated as exact matches (1.0).
+            # Rows without a CUM code start at None; the score is set after
+            # fuzzy resolution below.
+            confianza_score: Decimal | None = Decimal("1.0") if cum_code else None
+            estado = "APROBADO" if cum_code else "PENDIENTE"
 
             staging_rows.append(
                 {
@@ -226,7 +271,9 @@ async def procesar_archivo_proveedor(
                     "descripcion_raw": descripcion,
                     "vigente_desde": vigente_desde,
                     "vigente_hasta": vigente_hasta,
-                    "estado_homologacion": "PENDIENTE",
+                    "fecha_vigencia_indefinida": fecha_vigencia_indefinida,
+                    "confianza_score": confianza_score,
+                    "estado_homologacion": estado,
                     "datos_raw": datos_raw,
                     "sugerencias_cum": None,
                 }
@@ -239,6 +286,16 @@ async def procesar_archivo_proveedor(
                 for row in rows_needing_resolution:
                     sugerencias = await buscar_sugerencias_cum(session, row["descripcion_raw"])
                     row["sugerencias_cum"] = sugerencias
+
+                    # Pillar 4 – Auto-approve when best similarity score is
+                    # above the threshold; otherwise leave as PENDIENTE for
+                    # human-in-the-loop review.
+                    if sugerencias:
+                        best_score = max((s["score"] for s in sugerencias), default=0.0)
+                        row["confianza_score"] = Decimal(str(round(best_score, 4)))
+                        if best_score >= AUTO_APPROVE_THRESHOLD:
+                            row["cum_code"] = sugerencias[0]["id_cum"]
+                            row["estado_homologacion"] = "APROBADO"
 
         # Batch insert staging rows
         if staging_rows:
@@ -253,6 +310,8 @@ async def procesar_archivo_proveedor(
                         descripcion_raw=row["descripcion_raw"],
                         vigente_desde=row["vigente_desde"],
                         vigente_hasta=row["vigente_hasta"],
+                        fecha_vigencia_indefinida=row["fecha_vigencia_indefinida"],
+                        confianza_score=row["confianza_score"],
                         estado_homologacion=row["estado_homologacion"],
                         datos_raw=row["datos_raw"],
                         sugerencias_cum=row["sugerencias_cum"],
@@ -262,11 +321,15 @@ async def procesar_archivo_proveedor(
 
         con_cum = sum(1 for r in staging_rows if r["cum_code"])
         sin_cum = len(staging_rows) - con_cum
+        auto_aprobados = sum(1 for r in staging_rows if r["estado_homologacion"] == "APROBADO")
+        indefinite_dates = sum(1 for r in staging_rows if r["fecha_vigencia_indefinida"])
         resumen: dict[str, Any] = {
             "total_filas": len(rows_dicts),
             "staging_insertados": len(staging_rows),
             "con_cum": con_cum,
             "sin_cum_requieren_resolucion": sin_cum,
+            "auto_aprobados": auto_aprobados,
+            "fechas_indefinidas": indefinite_dates,
         }
 
         async with session_factory() as session:

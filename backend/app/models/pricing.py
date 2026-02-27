@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import Column, Date, DateTime, ForeignKey, Integer, Numeric, String
+from sqlalchemy import Boolean, Column, Date, DateTime, ForeignKey, Integer, Numeric, String
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlmodel import Field, SQLModel
@@ -24,6 +24,35 @@ class Proveedor(SQLModel, table=True):
     )
     nombre: str = Field(sa_column=Column(String, nullable=False))
     codigo: str = Field(sa_column=Column(String, nullable=False, unique=True, index=True))
+
+
+class ProveedorAlias(SQLModel, table=True):
+    """
+    Alias patterns used for auto-identifying a supplier from a filename or
+    header fingerprint.
+
+    Each row stores a single pattern (regex for 'filename', comma-separated
+    lowercased column names for 'header') associated with a supplier.
+    """
+
+    __tablename__ = "proveedor_aliases"
+
+    id: UUID = Field(
+        default_factory=uuid4,
+        sa_column=Column(PGUUID(as_uuid=True), primary_key=True),
+    )
+    proveedor_id: UUID = Field(
+        sa_column=Column(
+            PGUUID(as_uuid=True),
+            ForeignKey("proveedores.id"),
+            nullable=False,
+            index=True,
+        )
+    )
+    # 'filename' → regex matched against the file stem
+    # 'header'   → frozenset of lowercase column names (comma-separated)
+    tipo: str = Field(sa_column=Column(String, nullable=False))
+    alias_patron: str = Field(sa_column=Column(String, nullable=False))
 
 
 class ProveedorArchivo(SQLModel, table=True):
@@ -118,6 +147,24 @@ class StagingPrecioProveedor(SQLModel, table=True):
     medicamento_id: UUID | None = Field(
         default=None,
         sa_column=Column(PGUUID(as_uuid=True), ForeignKey("medicamentos.id"), nullable=True),
+    )
+
+    # --- Missing-data protocol (Pillar 3) ---
+    # True when the supplier did not provide validity dates; the row should be
+    # treated as having an indefinite (open-ended) validity period.
+    fecha_vigencia_indefinida: bool = Field(
+        default=False,
+        sa_column=Column(Boolean, nullable=False, server_default="false"),
+    )
+
+    # --- Confidence scoring (Pillar 4) ---
+    # Normalised match confidence in [0.0, 1.0].
+    # 1.0  → CUM code was provided directly by the supplier (exact).
+    # <1.0 → similarity score from the Polars + pg_trgm fuzzy matcher.
+    # NULL → row was skipped during resolution (no description available).
+    confianza_score: Decimal | None = Field(
+        default=None,
+        sa_column=Column(Numeric(5, 4), nullable=True),
     )
 
     # --- JSONB vaults ---
