@@ -189,7 +189,7 @@ export function CargaProveedor() {
         <span className="text-slate-300">→</span>
         {stepIndicator("Mapear Columnas", step, "mapping")}
         <span className="text-slate-300">→</span>
-        {stepIndicator("Revisar &amp; Aprobar", step, "review")}
+        {stepIndicator("Revisar & Aprobar", step, "review")}
       </div>
 
       {/* ---------------------------------------------------------------- */}

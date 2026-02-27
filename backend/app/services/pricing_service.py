@@ -24,7 +24,7 @@ STANDARD_FIELDS = ["cum_code", "precio_unitario", "descripcion", "vigente_desde"
 # Heuristic patterns for auto-detecting which supplier column maps to which
 # standard field.  Each pattern is tried against the *lower-cased* column name.
 _AUTO_DETECT_PATTERNS: dict[str, list[str]] = {
-    "cum_code": [r"cum", r"codigo\s*cum", r"c[oó]digo.*cum", r"axapta"],
+    "cum_code": [r"cum", r"codigo\s*cum", r"c[oó]digo.*cum", r"axapta"],  # "Código Axapta" is used by MEGALABS for CUM-like product codes
     "precio_unitario": [r"precio.*unit", r"unit.*price", r"precio\s*umd", r"precio"],
     "descripcion": [r"descripci[oó]n", r"producto", r"nombre", r"description"],
     "vigente_desde": [r"vigente?\s*desde", r"valid\s*from", r"fecha\s*inicio"],
