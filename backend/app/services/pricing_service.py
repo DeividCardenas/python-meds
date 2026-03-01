@@ -331,6 +331,8 @@ async def procesar_archivo_proveedor(
                     "estado_homologacion": estado,
                     "datos_raw": datos_raw,
                     "sugerencias_cum": None,
+                    # medicamento_id resolved after CUM lookup phase below
+                    "medicamento_id": None,
                 }
             )
 
@@ -356,6 +358,22 @@ async def procesar_archivo_proveedor(
                             row["cum_code"] = sugerencias[0]["id_cum"]
                             row["estado_homologacion"] = "APROBADO"
 
+        # ── Resolve medicamento_id for ALL rows with a known CUM code ──────
+        # This covers both rows with a direct CUM from the supplier file and
+        # rows auto-approved via fuzzy matching.  Requires the catalog DB.
+        rows_with_cum = [r for r in staging_rows if r["cum_code"]]
+        if rows_with_cum and catalog_session_factory is not None:
+            cum_sf = catalog_session_factory
+            async with cum_sf() as session:
+                cum_codes_to_lookup = list({r["cum_code"] for r in rows_with_cum})
+                stmt_med = select(Medicamento.id, Medicamento.id_cum).where(
+                    Medicamento.id_cum.in_(cum_codes_to_lookup)
+                )
+                med_results = (await session.exec(stmt_med)).all()
+                cum_to_med_id: dict[str, Any] = {row.id_cum: row.id for row in med_results}
+            for row in rows_with_cum:
+                row["medicamento_id"] = cum_to_med_id.get(row["cum_code"])
+
         # Batch insert staging rows
         if staging_rows:
             async with session_factory() as session:
@@ -375,6 +393,7 @@ async def procesar_archivo_proveedor(
                         fecha_vigencia_indefinida=row["fecha_vigencia_indefinida"],
                         confianza_score=row["confianza_score"],
                         estado_homologacion=row["estado_homologacion"],
+                        medicamento_id=row["medicamento_id"],
                         datos_raw=row["datos_raw"],
                         sugerencias_cum=row["sugerencias_cum"],
                     )
@@ -417,6 +436,7 @@ async def procesar_archivo_proveedor(
 async def publicar_precios_aprobados(
     archivo_id: str,
     session_factory: Any,
+    catalog_session_factory: Any | None = None,
 ) -> dict[str, Any]:
     """
     Publish all APROBADO staging rows for *archivo_id* to the production
@@ -426,6 +446,9 @@ async def publicar_precios_aprobados(
       1. Load the ProveedorArchivo record – raises if not found.
       2. Select every StagingPrecioProveedor row with
          estado_homologacion = 'APROBADO' for this archivo.
+      2b. Resolve medicamento_id from genhospi_catalog for rows where it is
+          still NULL but cum_code is known (handles rows processed before this
+          fix was applied, as well as the normal flow).
       3. Insert a PrecioProveedor row for each staging row.
       4. Update ProveedorArchivo.status → 'PUBLICADO'.
       5. Commit.  Any exception triggers a full rollback.
@@ -459,16 +482,38 @@ async def publicar_precios_aprobados(
                     "Revisa y aprueba filas en la pantalla de homologación antes de publicar."
                 )
 
+            # Step 2b – resolve medicamento_id for rows that still have NULL
+            # (e.g. rows processed before the catalog was populated, or cargas
+            # previas a este fix).  Skipped when catalog session is unavailable.
+            cum_to_med_id: dict[str, Any] = {}
+            filas_sin_med = [f for f in filas if f.medicamento_id is None and f.cum_code]
+            if filas_sin_med and catalog_session_factory is not None:
+                cum_codes_needed = list({f.cum_code for f in filas_sin_med})
+                async with catalog_session_factory() as cat_session:
+                    stmt_med = select(Medicamento.id, Medicamento.id_cum).where(
+                        Medicamento.id_cum.in_(cum_codes_needed)
+                    )
+                    med_rows = (await cat_session.exec(stmt_med)).all()
+                    cum_to_med_id = {row.id_cum: row.id for row in med_rows}
+                logger.info(
+                    "publicar_precios_aprobados: resolvió medicamento_id para %d/%d filas via catálogo",
+                    len(cum_to_med_id),
+                    len(filas_sin_med),
+                )
+
             fecha_publicacion = _datetime.utcnow()
 
             # Step 3 – insert production rows
             for fila in filas:
+                # Use medicamento_id from staging if already resolved; otherwise
+                # try the freshly-built lookup map.
+                med_id = fila.medicamento_id or cum_to_med_id.get(fila.cum_code or "")
                 precio = PrecioProveedor(
                     staging_id=fila.id,
                     archivo_id=fila.archivo_id,
                     proveedor_id=archivo.proveedor_id,
                     cum_code=fila.cum_code or "",
-                    medicamento_id=fila.medicamento_id,
+                    medicamento_id=med_id,
                     precio_unitario=fila.precio_unitario,
                     precio_unidad=fila.precio_unidad,
                     precio_presentacion=fila.precio_presentacion,

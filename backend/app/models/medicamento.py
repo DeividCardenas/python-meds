@@ -7,7 +7,7 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import JSON, Boolean, Column, DateTime, Float, ForeignKey, Index, Integer, Numeric, String, text
+from sqlalchemy import JSON, Boolean, Column, DateTime, Float, ForeignKey, Index, Integer, Numeric, String, UniqueConstraint, text
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlmodel import Field, SQLModel
 
@@ -140,6 +140,139 @@ class CUMSyncLog(SQLModel, table=True):
         sa_column=Column(DateTime(timezone=True), nullable=True),
     )
     ultima_sincronizacion: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
+
+
+class PrecioMedicamento(SQLModel, table=True):
+    """
+    Precios regulados y de mercado (SISMED) de cada CUM.
+
+    La clave natural del registro es la combinación (id_cum, canal_mercado),
+    que refleja que un mismo CUM puede tener precios distintos en el canal
+    institucional ('INS') y en el canal comercial ('COM').
+
+    El campo id_cum es una Foreign Key explícita que apunta a
+    medicamentos_cum.id_cum, garantizando integridad referencial con el
+    catálogo INVIMA.
+
+    Fuentes de datos
+    ----------------
+    - Precios regulados : Circulares / actos administrativos CNPMDM
+    - Precios de mercado: Dataset SISMED de datos.gov.co (resource 3he6-m866)
+    """
+
+    __tablename__ = "precios_medicamentos"
+    __table_args__ = (
+        UniqueConstraint("id_cum", "canal_mercado", name="uq_precio_cum_canal"),
+        Index("ix_precios_medicamentos_id_cum", "id_cum"),
+    )
+
+    # -----------------------------------------------------------------------
+    # Clave primaria interna y FK al catálogo CUM
+    # -----------------------------------------------------------------------
+    id: UUID = Field(
+        default_factory=uuid4,
+        sa_column=Column(PGUUID(as_uuid=True), primary_key=True),
+    )
+
+    # Llave lógica hacia el catálogo INVIMA – mismo formato que MedicamentoCUM.id_cum
+    # (ej. "123456-01").  Sin FK a nivel de BD para permitir precios SISMED de CUMs
+    # históricos o no incluidos aún en el catálogo activo de INVIMA.
+    id_cum: str = Field(
+        sa_column=Column(
+            String,
+            nullable=False,
+            index=False,  # cubierto por ix_precios_medicamentos_id_cum
+        )
+    )
+
+    # -----------------------------------------------------------------------
+    # Control de precios regulados (Estándar CNPMDM / datos.gov.co)
+    # -----------------------------------------------------------------------
+
+    # 1 = Libertad vigilada  2 = Libertad regulada  3 = Control directo
+    regimen_precios: int | None = Field(
+        default=None,
+        sa_column=Column(Integer, nullable=True),
+    )
+
+    # Precio máximo de venta asignado por la norma
+    precio_regulado_maximo: Decimal | None = Field(
+        default=None,
+        sa_column=Column(Numeric(14, 4), nullable=True),
+    )
+
+    # Ej. "Circular 013 de 2022"
+    acto_administrativo_precio: str | None = Field(
+        default=None,
+        sa_column=Column(String, nullable=True),
+    )
+
+    # -----------------------------------------------------------------------
+    # Precios de mercado SISMED
+    # -----------------------------------------------------------------------
+
+    # 'INS' = Institucional  |  'COM' = Comercial
+    canal_mercado: str = Field(
+        sa_column=Column(String(3), nullable=False),
+    )
+
+    precio_sismed_minimo: Decimal | None = Field(
+        default=None,
+        sa_column=Column(Numeric(14, 4), nullable=True),
+    )
+
+    precio_sismed_maximo: Decimal | None = Field(
+        default=None,
+        sa_column=Column(Numeric(14, 4), nullable=True),
+    )
+
+    # -----------------------------------------------------------------------
+    # Auditoría
+    # -----------------------------------------------------------------------
+    ultima_actualizacion: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
+
+
+class PrecioReguladoCNPMDM(SQLModel, table=True):
+    """
+    Precios máximos de venta fijados por la Comisión Nacional de Precios
+    de Medicamentos y Dispositivos Médicos (CNPMDM) del Ministerio de Salud.
+
+    La fuente es el 'Anexo Técnico' publicado con cada Circular de Precios.
+    El campo id_cum es la llave lógica hacia medicamentos_cum (mismo formato
+    "expediente-NN").  No se define FK a nivel de BD para permitir precios
+    de CUMs históricos o aún no sincronizados en el catálogo activo.
+
+    Referencia: Circular Única de Precios CNPMDM.
+    """
+
+    __tablename__ = "precios_regulados_cnpmdm"
+
+    # PK: id_cum es 1:1 con esta tabla — cada CUM tiene un único precio máximo
+    # fijado por la circular vigente.
+    id_cum: str = Field(
+        sa_column=Column(String, primary_key=True)
+    )
+
+    # Precio máximo de venta al público (PVP) expresado en pesos colombianos.
+    precio_maximo_venta: float | None = Field(
+        default=None,
+        sa_column=Column(Float, nullable=True),
+    )
+
+    # Identificador de la circular de origen, ej. "Circular 013 de 2022".
+    circular_origen: str | None = Field(
+        default=None,
+        sa_column=Column(String, nullable=True),
+    )
+
+    # Fecha de carga/actualización del registro en la BD.
+    ultima_actualizacion: datetime | None = Field(
         default=None,
         sa_column=Column(DateTime(timezone=True), nullable=True),
     )

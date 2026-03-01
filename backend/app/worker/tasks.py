@@ -18,6 +18,7 @@ from app.models.medicamento import CargaArchivo, CargaStatus, Medicamento, Preci
 from app.models.pricing import ProveedorArchivo
 from app.services.cum_socrata_service import sincronizar_catalogos_cum
 from app.services.invima_service import procesar_maestro_invima
+from app.services.sismed_socrata_service import sincronizar_precios_sismed
 from app.services.pricing_service import procesar_archivo_proveedor
 
 
@@ -29,12 +30,20 @@ celery_app = Celery(
 
 # ---------------------------------------------------------------------------
 # Celery Beat – programación de tareas periódicas
-# El catálogo CUM se sincroniza el día 1 de cada mes a las 2:00 AM.
+#
+# Día 1 a las 2:00 AM  → sincroniza catálogos CUM (INVIMA / Socrata)
+# Día 2 a las 3:00 AM  → sincroniza precios SISMED (CNPMDM / Socrata)
+#   El día 2 garantiza que los CUM ya estén actualizados antes de cruzar
+#   la FK id_cum al insertar precios.
 # ---------------------------------------------------------------------------
 celery_app.conf.beat_schedule = {
     "sincronizar-catalogos-cum-mensual": {
         "task": "task_sincronizar_cum",
         "schedule": crontab(minute=0, hour=2, day_of_month=1),
+    },
+    "sincronizar-precios-sismed-mensual": {
+        "task": "task_sincronizar_precios_sismed",
+        "schedule": crontab(minute=0, hour=3, day_of_month=2),
     },
 }
 celery_app.conf.timezone = "America/Bogota"
@@ -450,3 +459,121 @@ def task_procesar_archivo_proveedor(
         raise
     finally:
         _cleanup_temp_file(file_path)
+
+
+# ---------------------------------------------------------------------------
+# Hospital bulk-quotation pipeline
+# ---------------------------------------------------------------------------
+
+async def _cotizar_lista_async(
+    lote_id: str,
+    file_path: str,
+    hospital_id: str,
+) -> dict[str, Any]:
+    from app.services.bulk_quote_service import cotizar_lista
+
+    catalog_engine, catalog_sf = create_task_session_factory()
+    pricing_engine, pricing_sf  = create_pricing_task_session_factory()
+    try:
+        return await cotizar_lista(
+            file_path=file_path,
+            hospital_id=hospital_id,
+            lote_id=UUID(lote_id),
+            catalog_session_factory=catalog_sf,
+            pricing_session_factory=pricing_sf,
+        )
+    finally:
+        await catalog_engine.dispose()
+        await pricing_engine.dispose()
+
+
+async def _set_cotizacion_lote_failed(lote_id: str, exc: Exception) -> None:
+    from app.models.cotizacion import CotizacionLote
+
+    pricing_engine, pricing_sf = create_pricing_task_session_factory()
+    try:
+        lote_uuid = UUID(lote_id)
+        async with pricing_sf() as session:
+            lote = await session.get(CotizacionLote, lote_uuid)
+            if lote:
+                lote.status = "FAILED"
+                lote.resumen = {"error": f"{type(exc).__name__}: {exc}"}
+                session.add(lote)
+                await session.commit()
+    except Exception:  # noqa: BLE001
+        logger.exception("No se pudo marcar CotizacionLote FAILED para %s", lote_id)
+    finally:
+        await pricing_engine.dispose()
+
+
+def _mark_cotizacion_failed(lote_id: str, exc: Exception) -> None:
+    try:
+        _run_async_safely(_set_cotizacion_lote_failed(lote_id, exc))
+    except Exception:  # noqa: BLE001
+        logger.exception("Error en _mark_cotizacion_failed para lote %s", lote_id)
+
+
+@celery_app.task(name="task_cotizar_medicamentos")
+def task_cotizar_medicamentos(
+    lote_id: str,
+    file_path: str,
+    hospital_id: str = "GLOBAL",
+) -> dict[str, Any]:
+    """
+    Tarea Celery para procesar una lista de medicamentos del hospital y
+    encontrar los precios más recientes por proveedor para cada uno.
+
+    Flujo
+    -----
+    1. Lee el CSV/Excel con una columna 'nombre'.
+    2. Por cada nombre: drug_parser → matching_engine → precios_proveedor.
+    3. 'Mejor precio' = precio con fecha_publicacion más reciente.
+    4. Persiste resultados en cotizaciones_lote (JSONB) y cambia status → COMPLETED.
+    """
+    try:
+        return _run_async_safely(_cotizar_lista_async(lote_id, file_path, hospital_id))
+    except Exception as exc:  # noqa: BLE001
+        _mark_cotizacion_failed(lote_id, exc)
+        raise
+    finally:
+        _cleanup_temp_file(file_path)
+
+
+# ---------------------------------------------------------------------------
+# Sincronización de precios SISMED (CNPMDM)
+# ---------------------------------------------------------------------------
+
+
+async def _sincronizar_precios_sismed_async() -> dict[str, Any]:
+    """
+    Corrutina que descarga y sincroniza el catálogo de precios SISMED desde
+    datos.gov.co (resource 3he6-m866) usando la Catalog DB.
+
+    Se usa la misma DB de catálogo porque la tabla precios_medicamentos tiene
+    FK hacia medicamentos_cum, que vive en genhospi_catalog.
+    """
+    task_engine, session_factory = create_task_session_factory()
+    try:
+        return await sincronizar_precios_sismed(session_factory)
+    finally:
+        await task_engine.dispose()
+
+
+@celery_app.task(name="task_sincronizar_precios_sismed")
+def task_sincronizar_precios_sismed() -> dict[str, Any]:
+    """
+    Tarea Celery que sincroniza mensualmente los precios de medicamentos desde
+    el dataset público SISMED del Ministerio de Salud (datos.gov.co).
+
+    Programada para ejecutarse el día 2 de cada mes a las 3:00 AM
+    (América/Bogotá) mediante Celery Beat, siempre después de que la tarea
+    "task_sincronizar_cum" (día 1, 2:00 AM) haya actualizado medicamentos_cum.
+
+    Implementa ON CONFLICT (id_cum, canal_mercado) DO UPDATE para upsert
+    idempotente: puede ejecutarse múltiples veces sin duplicar registros.
+    """
+    try:
+        return _run_async_safely(_sincronizar_precios_sismed_async())
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Error en sincronización mensual de precios SISMED: %s", exc)
+        raise

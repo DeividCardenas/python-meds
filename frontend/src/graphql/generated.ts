@@ -252,3 +252,145 @@ export const PublicarPreciosProveedorDocument = gql`
   }
 ` as TypedDocumentNode<PublicarPreciosProveedorMutation, PublicarPreciosProveedorMutationVariables>;
 
+// ---------------------------------------------------------------------------
+// Bulk hospital quotation
+// ---------------------------------------------------------------------------
+
+export type IniciarCotizacionMutationVariables = {
+  file: File;
+  hospitalId?: string | null;
+};
+
+export type IniciarCotizacionMutation = {
+  iniciarCotizacion: {
+    id: string;
+    status: string;
+    filename: string;
+    hospitalId: string;
+    fechaCreacion: string;
+  };
+};
+
+export type PrecioItemFragment = {
+  proveedorNombre?: string | null;
+  precioUnitario?: number | null;
+  precioUnidad?: number | null;
+  precioPresentacion?: number | null;
+  porcentajeIva?: number | null;
+  vigenteDesde?: string | null;
+  vigenteHasta?: string | null;
+  fechaPublicacion?: string | null;
+};
+
+export type CotizacionFilaFragment = {
+  nombreInput: string;
+  matchStage?: string | null;
+  matchConfidence?: number | null;
+  cumId?: string | null;
+  nombreMatcheado?: string | null;
+  formaFarmaceutica?: string | null;
+  concentracion?: string | null;
+  rejectReason?: string | null;
+  innScore?: number | null;
+  preciosCount?: number | null;
+  esRegulado?: boolean | null;
+  precioMaximoRegulado?: number | null;
+  mejorPrecio?: PrecioItemFragment | null;
+  todosPrecios?: PrecioItemFragment[] | null;
+};
+
+export type ResumenCotizacionFragment = {
+  total: number;
+  conMatch: number;
+  sinMatch: number;
+  conPrecio: number;
+  sinPrecio: number;
+  tasaMatch: number;
+  tasaPrecio: number;
+};
+
+export type GetCotizacionQueryVariables = {
+  id: string;
+};
+
+export type GetCotizacionQuery = {
+  getCotizacion?: {
+    id: string;
+    status: string;
+    filename: string;
+    hospitalId: string;
+    fechaCreacion: string;
+    fechaCompletado?: string | null;
+    resumen?: ResumenCotizacionFragment | null;
+    filas?: CotizacionFilaFragment[] | null;
+  } | null;
+};
+
+export const IniciarCotizacionDocument = gql`
+  mutation IniciarCotizacion($file: Upload!, $hospitalId: String) {
+    iniciarCotizacion(file: $file, hospitalId: $hospitalId) {
+      id
+      status
+      filename
+      hospitalId
+      fechaCreacion
+    }
+  }
+` as TypedDocumentNode<IniciarCotizacionMutation, IniciarCotizacionMutationVariables>;
+
+export const GetCotizacionDocument = gql`
+  query GetCotizacion($id: ID!) {
+    getCotizacion(id: $id) {
+      id
+      status
+      filename
+      hospitalId
+      fechaCreacion
+      fechaCompletado
+      resumen {
+        total
+        conMatch
+        sinMatch
+        conPrecio
+        sinPrecio
+        tasaMatch
+        tasaPrecio
+      }
+      filas {
+        nombreInput
+        matchStage
+        matchConfidence
+        cumId
+        nombreMatcheado
+        formaFarmaceutica
+        concentracion
+        rejectReason
+        innScore
+        preciosCount
+        esRegulado
+        precioMaximoRegulado
+        mejorPrecio {
+          proveedorNombre
+          precioUnitario
+          precioUnidad
+          precioPresentacion
+          porcentajeIva
+          vigenteDesde
+          vigenteHasta
+          fechaPublicacion
+        }
+        todosPrecios {
+          proveedorNombre
+          precioUnitario
+          precioUnidad
+          precioPresentacion
+          porcentajeIva
+          vigenteDesde
+          vigenteHasta
+          fechaPublicacion
+        }
+      }
+    }
+  }
+` as TypedDocumentNode<GetCotizacionQuery, GetCotizacionQueryVariables>;
+

@@ -490,6 +490,14 @@ async def sincronizar_catalogos_cum(
                 logger.error("CUM [%s] falló: %s", fuente, exc)
                 resultados[fuente] = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
 
+    # Poblar/actualizar medicamentos desde medicamentos_cum (UPSERT masivo)
+    try:
+        poblar_result = await poblar_medicamentos_desde_cum(session_factory)
+        resultados["_poblar_medicamentos"] = {"status": "ok", **poblar_result}
+    except Exception as exc:  # noqa: BLE001
+        logger.error("Error poblando medicamentos desde CUM: %s", exc)
+        resultados["_poblar_medicamentos"] = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
+
     # Propagar estado_cum y activo a la tabla medicamentos tras la sincronización
     try:
         sync_result = await sincronizar_estado_medicamentos(session_factory)
@@ -533,3 +541,80 @@ async def sincronizar_estado_medicamentos(
         filas_actualizadas,
     )
     return {"filas_actualizadas": filas_actualizadas}
+
+
+async def poblar_medicamentos_desde_cum(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> dict[str, Any]:
+    """
+    Sincroniza la tabla ``medicamentos`` con el contenido de ``medicamentos_cum``
+    mediante un UPSERT masivo.
+
+    - Inserta nuevos medicamentos cuyo id_cum no exista en ``medicamentos``.
+    - Actualiza laboratorio, principio_activo, forma_farmaceutica,
+      registro_invima, atc, estado_cum y activo en los registros existentes.
+    - No sobrescribe ``embedding_status`` en filas que ya tienen embeddings
+      calculados, evitando regeneración innecesaria.
+    - ``nombre_limpio`` se construye concatenando nombre comercial + principio
+      activo y normalizando a minúsculas sin símbolos de marca.
+
+    Se llama automáticamente al inicio de la fase de post-proceso en
+    ``sincronizar_catalogos_cum``, antes de ``sincronizar_estado_medicamentos``.
+    """
+    async with session_factory() as session:
+        result = await session.execute(
+            sa_text("""
+            INSERT INTO medicamentos (
+                id,
+                id_cum,
+                nombre_limpio,
+                laboratorio,
+                principio_activo,
+                forma_farmaceutica,
+                registro_invima,
+                atc,
+                estado_cum,
+                activo,
+                embedding_status
+            )
+            SELECT
+                gen_random_uuid(),
+                c.id_cum,
+                lower(trim(
+                    regexp_replace(
+                        COALESCE(c.descripcioncomercial, c.producto, '')
+                            || ' '
+                            || COALESCE(c.principioactivo, ''),
+                        '\s+',
+                        ' ',
+                        'g'
+                    )
+                )) AS nombre_limpio,
+                c.titular                AS laboratorio,
+                c.principioactivo        AS principio_activo,
+                c.formafarmaceutica      AS forma_farmaceutica,
+                c.registrosanitario      AS registro_invima,
+                c.atc,
+                c.estadocum              AS estado_cum,
+                lower(COALESCE(c.estadocum, '')) IN ('vigente', 'activo') AS activo,
+                'pending'                AS embedding_status
+            FROM medicamentos_cum c
+            WHERE c.id_cum IS NOT NULL
+            ON CONFLICT (id_cum) DO UPDATE SET
+                nombre_limpio      = EXCLUDED.nombre_limpio,
+                laboratorio        = EXCLUDED.laboratorio,
+                principio_activo   = EXCLUDED.principio_activo,
+                forma_farmaceutica = EXCLUDED.forma_farmaceutica,
+                registro_invima    = EXCLUDED.registro_invima,
+                atc                = EXCLUDED.atc,
+                estado_cum         = EXCLUDED.estado_cum,
+                activo             = EXCLUDED.activo
+            """)
+        )
+        await session.commit()
+        filas_afectadas = result.rowcount
+    logger.info(
+        "poblar_medicamentos_desde_cum: %s filas insertadas/actualizadas.",
+        filas_afectadas,
+    )
+    return {"filas_afectadas": filas_afectadas}

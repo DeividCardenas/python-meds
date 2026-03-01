@@ -2,8 +2,9 @@ import { useMemo, useState } from "react";
 
 import { BuscadorMedicamentos } from "./components/BuscadorMedicamentos";
 import { CargaProveedor } from "./components/CargaProveedor";
+import { CotizadorHospital } from "./components/CotizadorHospital";
 
-const sections = ["Buscador", "Proveedores", "Auditoría"] as const;
+const sections = ["Buscador", "Cotizador", "Proveedores", "Auditoría"] as const;
 type Section = (typeof sections)[number];
 
 function App() {
@@ -57,6 +58,7 @@ function App() {
 
         <main className="space-y-6 p-8">
           {activeSection === "Buscador" ? <BuscadorMedicamentos /> : null}
+          {activeSection === "Cotizador" ? <CotizadorHospital /> : null}
           {activeSection === "Proveedores" ? <CargaProveedor /> : null}
           {activeSection === "Auditoría" ? (
             <section className="rounded-xl border border-slate-200 bg-white p-8 shadow-sm">

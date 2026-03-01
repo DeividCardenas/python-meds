@@ -1,13 +1,13 @@
-import { useState, useEffect, useRef, type FormEvent } from "react";
 import { useLazyQuery } from "@apollo/client";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import {
-  ComparativaPreciosDocument,
-  SearchMedicamentosDocument,
-  type ComparativaPreciosQuery,
-  type ComparativaPreciosQueryVariables,
-  type SearchMedicamentosQuery,
-  type SearchMedicamentosQueryVariables,
+    ComparativaPreciosDocument,
+    SearchMedicamentosDocument,
+    type ComparativaPreciosQuery,
+    type ComparativaPreciosQueryVariables,
+    type SearchMedicamentosQuery,
+    type SearchMedicamentosQueryVariables,
 } from "../graphql/generated";
 
 const toTitleCase = (value: string | null | undefined) =>
@@ -303,20 +303,12 @@ export function BuscadorMedicamentos() {
                   key={item.id}
                   className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition duration-200 hover:scale-105 hover:shadow-lg"
                 >
-                  {item.esRegulado && item.precioMaximoRegulado ? (
+                  {item.esRegulado ? (
                     <p className="mb-3 inline-flex rounded-full bg-orange-100 px-2.5 py-1 text-xs font-semibold text-orange-700">
-                      Regulado · Máx {formatPrice(item.precioMaximoRegulado)}
+                      🔒 Regulado CNPMDM{item.precioMaximoRegulado ? ` · Máx ${formatPrice(item.precioMaximoRegulado)}` : ""}
                     </p>
                   ) : null}
-                  {item.estadoCum ? (
-                    <span
-                      className={`mb-2 mr-2 inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold ${
-                        item.activo ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"
-                      }`}
-                    >
-                      {item.activo ? "✓ " : "✗ "}{item.estadoCum}
-                    </span>
-                  ) : null}                  {/* Badge de estado CUM */}
+                  {/* Badge de estado CUM */}
                   {item.estadoCum ? (
                     <span
                       className={`mb-2 mr-2 inline-flex rounded-full px-2.5 py-0.5 text-xs font-semibold ${
@@ -417,7 +409,17 @@ export function BuscadorMedicamentos() {
                         <td className="px-3 py-2">{toTitleCase(item.laboratorio) || "-"}</td>
                         <td className="px-3 py-2">{formatPrice(item.precioUnitario) || "-"}</td>
                         <td className="px-3 py-2">{formatPrice(item.precioEmpaque) || "-"}</td>
-                        <td className="px-3 py-2">{item.esRegulado ? "SI" : "NO"}</td>
+                        <td className="px-3 py-2">
+                          {item.esRegulado ? (
+                            <span className="inline-flex rounded-full bg-orange-100 px-2 py-0.5 text-xs font-semibold text-orange-700">
+                              🔒 Regulado
+                            </span>
+                          ) : (
+                            <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-400">
+                              No regulado
+                            </span>
+                          )}
+                        </td>
                         <td className="px-3 py-2">{formatPrice(item.precioMaximoRegulado) || "-"}</td>
                       </tr>
                     ))

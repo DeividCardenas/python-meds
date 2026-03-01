@@ -31,3 +31,71 @@ query ComparativaPrecios($principioActivo: String!) {
     precioMaximoRegulado
   }
 }
+
+# ---------------------------------------------------------------------------
+# Bulk hospital quotation
+# ---------------------------------------------------------------------------
+
+mutation IniciarCotizacion($file: Upload!, $hospitalId: String) {
+  iniciarCotizacion(file: $file, hospitalId: $hospitalId) {
+    id
+    status
+    filename
+    hospitalId
+    fechaCreacion
+  }
+}
+
+query GetCotizacion($id: ID!) {
+  getCotizacion(id: $id) {
+    id
+    status
+    filename
+    hospitalId
+    fechaCreacion
+    fechaCompletado
+    resumen {
+      total
+      conMatch
+      sinMatch
+      conPrecio
+      sinPrecio
+      tasaMatch
+      tasaPrecio
+    }
+    filas {
+      nombreInput
+      matchStage
+      matchConfidence
+      cumId
+      nombreMatcheado
+      formaFarmaceutica
+      concentracion
+      rejectReason
+      innScore
+      preciosCount
+      esRegulado
+      precioMaximoRegulado
+      mejorPrecio {
+        proveedorNombre
+        precioUnitario
+        precioUnidad
+        precioPresentacion
+        porcentajeIva
+        vigenteDesde
+        vigenteHasta
+        fechaPublicacion
+      }
+      todosPrecios {
+        proveedorNombre
+        precioUnitario
+        precioUnidad
+        precioPresentacion
+        porcentajeIva
+        vigenteDesde
+        vigenteHasta
+        fechaPublicacion
+      }
+    }
+  }
+}
