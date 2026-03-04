@@ -10,6 +10,8 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlmodel import Field, SQLModel
 
+from app.models.enums import CotizacionStatus
+
 
 class CotizacionLote(SQLModel, table=True):
     """
@@ -65,8 +67,8 @@ class CotizacionLote(SQLModel, table=True):
         sa_column=Column(String, nullable=False, index=True),
     )
     filename: str = Field(sa_column=Column(String, nullable=False))
-    status: str = Field(
-        default="PENDING",
+    status: CotizacionStatus = Field(
+        default=CotizacionStatus.PENDING,
         sa_column=Column(String, nullable=False, index=True),
     )
     # Full list of per-drug result rows (set when COMPLETED)

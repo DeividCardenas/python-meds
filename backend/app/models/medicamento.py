@@ -2,24 +2,17 @@ from __future__ import annotations
 
 from datetime import datetime
 from decimal import Decimal
-from enum import Enum
 from typing import Any
 from uuid import UUID, uuid4
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import JSON, Boolean, Column, DateTime, Float, ForeignKey, Index, Integer, Numeric, String, UniqueConstraint, text
-from sqlalchemy.dialects.postgresql import UUID as PGUUID
+from sqlalchemy import JSON, Boolean, Column, Computed, DateTime, Float, ForeignKey, Index, Integer, Numeric, String, UniqueConstraint, text
+from sqlalchemy.dialects.postgresql import TSVECTOR, UUID as PGUUID
 from sqlmodel import Field, SQLModel
 
+from app.models.enums import CargaStatus  # noqa: F401 – re-exported for back-compat
+
 EMBEDDING_DIMENSION = 768
-
-
-class CargaStatus(str, Enum):
-    PENDING = "PENDING"
-    PROCESSING = "PROCESSING"
-    COMPLETED = "COMPLETED"
-    FAILED = "FAILED"
-    PUBLICADO = "PUBLICADO"
 
 
 class Medicamento(SQLModel, table=True):
@@ -48,6 +41,20 @@ class Medicamento(SQLModel, table=True):
     # Flag desnormalizado: True cuando estadocum es Vigente/Activo, True por defecto para
     # medicamentos sin id_cum (no vinculados al catálogo INVIMA)
     activo: bool = Field(default=True, sa_column=Column(Boolean, nullable=False, server_default="true"))
+    # Columna STORED GENERATED para búsqueda FTS eficiente (migración 0018).
+    # PostgreSQL la mantiene actualizada automáticamente; la app nunca escribe aquí.
+    # Permite usar el índice GIN ix_medicamentos_nombre_tsvector_gin con @@.
+    nombre_tsvector: str | None = Field(
+        default=None,
+        sa_column=Column(
+            TSVECTOR,
+            Computed(
+                "to_tsvector('simple', lower(coalesce(nombre_limpio, '')))",
+                persisted=True,
+            ),
+            nullable=True,
+        ),
+    )
 
 
 class PrecioReferencia(SQLModel, table=True):

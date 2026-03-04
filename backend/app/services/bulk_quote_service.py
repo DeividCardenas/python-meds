@@ -23,6 +23,7 @@ Design decisions
 """
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 from datetime import datetime
@@ -34,6 +35,7 @@ import polars as pl
 from sqlmodel import select
 
 from app.models.cotizacion import CotizacionLote
+from app.models.enums import CotizacionStatus
 from app.models.pricing import PrecioProveedor, Proveedor
 from app.services.drug_parser import parse
 from app.services.matching_engine import match_drug
@@ -48,6 +50,12 @@ _NOMBRE_COLUMNS = [
     "producto", "Producto", "PRODUCTO",
     "description", "name",
 ]
+
+# How many catalog DB queries to run in parallel during the matching phase.
+# Higher values use more DB connections but finish much faster.
+# Default: 30 concurrent tasks (the asyncpg pool default is 5-10 connections;
+# increase SQLALCHEMY_POOL_SIZE env var if you raise this limit significantly).
+MATCH_CONCURRENCY: int = 30
 
 
 # ---------------------------------------------------------------------------
@@ -78,7 +86,11 @@ def _read_nombres(file_path: str) -> list[str]:
             name_col = candidate
             break
     if name_col is None:
-        name_col = df.columns[0]
+        raise ValueError(
+            f"No se encontró una columna de nombres de medicamentos en el archivo '{path.name}'. "
+            f"Columnas detectadas: {df.columns}. "
+            f"Se esperaba alguna de: {_NOMBRE_COLUMNS}."
+        )
 
     return [
         v.strip()
@@ -138,6 +150,53 @@ async def _build_proveedor_map(pricing_session: Any) -> dict[str, tuple[str, str
     }
 
 
+async def _get_precios_batch(
+    pricing_session: Any,
+    cum_codes: list[str],
+    proveedor_map: dict[str, tuple[str, str]],
+) -> dict[str, list[dict[str, Any]]]:
+    """
+    Batch price lookup: single IN() query for all CUM codes at once.
+
+    Returns dict mapping cum_code → list[price dicts] sorted by
+    fecha_publicacion DESC (most recent = best price = index 0).
+    Replaces N individual _get_precios_para_cum() calls with one round-trip.
+    """
+    if not cum_codes:
+        return {}
+
+    stmt = (
+        select(PrecioProveedor)
+        .where(PrecioProveedor.cum_code.in_(cum_codes))
+        .order_by(PrecioProveedor.cum_code, PrecioProveedor.fecha_publicacion.desc())
+    )
+    rows = (await pricing_session.exec(stmt)).all()
+
+    result: dict[str, list[dict[str, Any]]] = {}
+    for precio in rows:
+        cc = precio.cum_code
+        bucket = result.setdefault(cc, [])
+        if len(bucket) >= 20:          # cap at 20 prices per CUM (most recent win)
+            continue
+        pid = str(precio.proveedor_id) if precio.proveedor_id else None
+        nombre_prov, codigo_prov = (
+            proveedor_map.get(pid, ("Desconocido", None)) if pid else ("Desconocido", None)
+        )
+        bucket.append({
+            "proveedor_id":        pid,
+            "proveedor_nombre":    nombre_prov,
+            "proveedor_codigo":    codigo_prov,
+            "precio_unitario":     float(precio.precio_unitario)     if precio.precio_unitario     is not None else None,
+            "precio_unidad":       float(precio.precio_unidad)       if precio.precio_unidad       is not None else None,
+            "precio_presentacion": float(precio.precio_presentacion) if precio.precio_presentacion is not None else None,
+            "porcentaje_iva":      float(precio.porcentaje_iva)      if precio.porcentaje_iva      is not None else None,
+            "vigente_desde":       str(precio.vigente_desde)         if precio.vigente_desde       else None,
+            "vigente_hasta":       str(precio.vigente_hasta)         if precio.vigente_hasta       else None,
+            "fecha_publicacion":   precio.fecha_publicacion.isoformat() if precio.fecha_publicacion else None,
+        })
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Main service function
 # ---------------------------------------------------------------------------
@@ -170,33 +229,20 @@ async def cotizar_lista(
         len(nombres), hospital_id, lote_id,
     )
 
-    resultado: list[dict[str, Any]] = []
+    # ── Phase 1: parallel matching ───────────────────────────────────────────
+    # All drugs are parsed + matched concurrently (up to MATCH_CONCURRENCY at a
+    # time).  Each coroutine opens its own catalog session so a DB error in one
+    # drug never poisons the transaction state for other rows.
+    semaphore = asyncio.Semaphore(MATCH_CONCURRENCY)
 
-    async with catalog_session_factory() as catalog_session:
-        async with pricing_session_factory() as pricing_session:
-
-            # Pre-load provider names once — avoids N+1 queries per drug
-            proveedor_map = await _build_proveedor_map(pricing_session)
-
-            for nombre in nombres:
+    async def _match_one(nombre: str) -> dict[str, Any]:
+        """Parse + match one drug name; returns partial result (no pricing yet)."""
+        async with semaphore:
+            async with catalog_session_factory() as catalog_session:
                 try:
-                    # ── Parse ──────────────────────────────────────────────
                     parsed = parse(nombre)
-
-                    # ── Match against catalog ───────────────────────────────
-                    match = await match_drug(catalog_session, parsed, hospital_id)
-
-                    # ── Fetch prices ────────────────────────────────────────
-                    precios: list[dict[str, Any]] = []
-                    if match.cum_id:
-                        precios = await _get_precios_para_cum(
-                            pricing_session, match.cum_id, proveedor_map
-                        )
-
-                    # Best price = index 0 (already sorted DESC by fecha_publicacion)
-                    mejor_precio = precios[0] if precios else None
-
-                    resultado.append({
+                    match  = await match_drug(catalog_session, parsed, hospital_id)
+                    return {
                         "nombre_input":       nombre,
                         "parse_warnings":     match.parser_warnings or [],
                         "match_stage":        match.stage.value,
@@ -207,14 +253,12 @@ async def cotizar_lista(
                         "concentracion":      match.db_concentracion,
                         "reject_reason":      match.reject_reason.value if match.reject_reason else None,
                         "inn_score":          round(match.inn_score, 4) if match.inn_score is not None else None,
-                        "precios_count":      len(precios),
-                        "mejor_precio":       mejor_precio,
-                        "todos_precios":      precios,
-                    })
-
+                    }
                 except Exception as exc:
-                    logger.error("cotizar_lista: error en '%s': %s", nombre, exc, exc_info=True)
-                    resultado.append({
+                    logger.error(
+                        "cotizar_lista: error en '%s': %s", nombre, exc, exc_info=True
+                    )
+                    return {
                         "nombre_input":       nombre,
                         "parse_warnings":     [str(exc)],
                         "match_stage":        "ERROR",
@@ -225,10 +269,30 @@ async def cotizar_lista(
                         "concentracion":      None,
                         "reject_reason":      "PROCESSING_ERROR",
                         "inn_score":          None,
-                        "precios_count":      0,
-                        "mejor_precio":       None,
-                        "todos_precios":      [],
-                    })
+                    }
+
+    match_results: list[dict[str, Any]] = list(
+        await asyncio.gather(*[_match_one(n) for n in nombres])
+    )
+
+    # ── Phase 2: batch pricing lookup ────────────────────────────────────────
+    # Single IN() query for ALL matched CUM codes — replaces N individual
+    # round-trips with one batch request.
+    async with pricing_session_factory() as pricing_session:
+        proveedor_map  = await _build_proveedor_map(pricing_session)
+        cum_codes      = list({r["cum_id"] for r in match_results if r["cum_id"]})
+        precios_by_cum = await _get_precios_batch(pricing_session, cum_codes, proveedor_map)
+
+    # ── Phase 3: assemble final result list ──────────────────────────────────
+    resultado: list[dict[str, Any]] = []
+    for r in match_results:
+        precios = precios_by_cum.get(r["cum_id"], []) if r["cum_id"] else []
+        resultado.append({
+            **r,
+            "precios_count": len(precios),
+            "mejor_precio":  precios[0] if precios else None,
+            "todos_precios": precios,
+        })
 
     # ── Summary stats ────────────────────────────────────────────────────────
     total      = len(resultado)
@@ -249,7 +313,7 @@ async def cotizar_lista(
     async with pricing_session_factory() as session:
         lote: CotizacionLote | None = await session.get(CotizacionLote, lote_id)
         if lote:
-            lote.status           = "COMPLETED"
+            lote.status           = CotizacionStatus.COMPLETED.value
             lote.resultado        = resultado
             lote.resumen          = resumen
             lote.fecha_completado = datetime.utcnow()

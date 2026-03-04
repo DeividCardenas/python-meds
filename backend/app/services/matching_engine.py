@@ -37,7 +37,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import Column, DateTime, Float, Index, String, text
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
-from sqlalchemy import func, select
+from sqlalchemy import func, literal, select
 from sqlmodel import Field, SQLModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -63,8 +63,16 @@ logger = logging.getLogger(__name__)
 #: Applied in SQL — Python concentration hard barrier is the enforcer.
 TRGM_INN_THRESHOLD: float = 0.85
 
+#: Minimum word_similarity for the INN field in Stage 1b and Stage 2 OR clause.
+#: word_similarity(query, source) is computed on the best matching substring of
+#: source, so 'abacavir' vs 'ABACAVIR SULFATO EQUIVALENTE A ABACAVIR' scores ~1.0.
+#: A threshold of 0.88 avoids false positives while catching partial-name entries.
+WORD_SIM_INN_THRESHOLD: float = 0.88
+
 #: Maximum candidates retrieved by Stage 2 SQL (before Python filtering).
-STAGE2_CANDIDATE_LIMIT: int = 20
+#: Stage 1 Pass B now handles the easy word-similarity cases, so Stage 2
+#: only sees genuine edge cases — 10 candidates is sufficient.
+STAGE2_CANDIDATE_LIMIT: int = 10
 
 #: Form similarity threshold for Stage 2 (applied in Python, not SQL).
 FORM_TRGM_SOFT_THRESHOLD: float = 0.60
@@ -238,7 +246,18 @@ def _concentration_hard_barrier(
 
     db_conc = _parse_db_concentration(db_conc_raw)
     if db_conc is None:
-        return False, RejectReason.CONCENTRATION_PARSE_FAILED
+        # The DB concentration field is unparseable (e.g., a category code
+        # like "A", "B", "C" stored by the upstream ETL instead of an actual
+        # dose value).  Rather than silently rejecting every candidate due to
+        # upstream data quality issues, bypass the barrier and let the INN /
+        # form-group stages be the only filters.  A warning is emitted so that
+        # the data-quality issue remains visible in server logs.
+        logger.warning(
+            "_concentration_hard_barrier: db_conc_raw=%r is unparseable "
+            "(likely ETL category code). Bypassing concentration barrier.",
+            db_conc_raw,
+        )
+        return True, None
 
     if not query_conc.matches(db_conc):
         return False, RejectReason.CONCENTRATION_MISMATCH
@@ -314,15 +333,24 @@ async def _stage1_exact(
     inn_query:  str,
 ) -> Optional[tuple]:
     """
-    Exact match on principio_activo (case-insensitive) and forma_farmaceutica.
-    Concentration checked in Python after retrieval.
+    Two-pass exact match:
 
-    Returns the first row whose concentration passes the hard barrier,
-    or None if no row survives.
+    Pass A — strict equality on principio_activo + forma_farmaceutica.
+             Handles normal CUM records where PA is just the INN.
+
+    Pass B — word_similarity(inn_query, lower(PA)) ≥ WORD_SIM_INN_THRESHOLD
+             + forma LIKE '%canonical_form%'.
+             Handles CUM records where PA is a full chemical description,
+             e.g. "ABACAVIR SULFATO 702 MG EQUIVALENTE A ABACAVIR" when
+             the query is simply "abacavir".
+
+    Concentration is always checked in Python (hard barrier).
+    Returns the first row whose concentration passes the hard barrier.
     """
     canonical_form = drug.canonical_form or ""
 
-    stmt = (
+    # ── Pass A: strict equality ──────────────────────────────────────────────
+    stmt_a = (
         select(
             Medicamento.id,
             Medicamento.id_cum,
@@ -341,12 +369,60 @@ async def _stage1_exact(
         .where(Medicamento.activo == True)  # noqa: E712
         .limit(10)
     )
-
-    rows = (await session.exec(stmt)).all()
-
+    rows = (await session.exec(stmt_a)).all()
     for row in rows:
-        passes, reason = _concentration_hard_barrier(drug, row.concentracion)
+        passes, _ = _concentration_hard_barrier(drug, row.concentracion)
         if passes:
+            return row
+
+    if not canonical_form:
+        return None
+
+    # ── Pass B: word-similarity on PA + LIKE on forma ───────────────────────
+    # Set the word_similarity threshold so PostgreSQL uses the GIN index
+    # ix_medicamentos_principio_activo_gin with the <% operator.
+    await session.execute(
+        text("SET pg_trgm.word_similarity_threshold = :threshold"),
+        {"threshold": WORD_SIM_INN_THRESHOLD},
+    )
+    pa_lower_b = func.lower(func.coalesce(Medicamento.principio_activo, ""))
+    stmt_b = (
+        select(
+            Medicamento.id,
+            Medicamento.id_cum,
+            Medicamento.principio_activo,
+            Medicamento.forma_farmaceutica,
+            Medicamento.nombre_limpio,
+            MedicamentoCUM.concentracion,
+        )
+        .outerjoin(MedicamentoCUM, Medicamento.id_cum == MedicamentoCUM.id_cum)
+        .where(
+            # <% is the word_similarity operator; GIN ix_medicamentos_principio_activo_gin
+            # is used when pg_trgm.word_similarity_threshold is set (SET above).
+            literal(inn_query).op("<%")(pa_lower_b)
+        )
+        .where(
+            func.lower(func.coalesce(Medicamento.forma_farmaceutica, "")).contains(
+                canonical_form
+            )
+        )
+        .where(Medicamento.activo == True)  # noqa: E712
+        .order_by(
+            func.word_similarity(
+                inn_query,
+                pa_lower_b,
+            ).desc()
+        )
+        .limit(10)
+    )
+    rows_b = (await session.exec(stmt_b)).all()
+    for row in rows_b:
+        passes, _ = _concentration_hard_barrier(drug, row.concentracion)
+        if passes:
+            logger.debug(
+                "Stage 1 Pass-B word_similarity hit: CUM=%s PA=%r",
+                row.id_cum, row.principio_activo,
+            )
             return row
 
     return None
@@ -377,6 +453,24 @@ async def _stage2_fuzzy(
       to re-parse the DB concentration string in Python to guarantee the
       same normalization logic is applied to both sides.
     """
+    # Stage 2 uses GREATEST(similarity, word_similarity) as the score.
+    # Set session-level thresholds so PostgreSQL uses the GIN index
+    # ix_medicamentos_principio_activo_gin with % and <% operators.
+    # Without these SET commands the GIN index is NOT used for function calls.
+    await session.execute(
+        text("SET pg_trgm.similarity_threshold = :sim_threshold"),
+        {"sim_threshold": TRGM_INN_THRESHOLD},
+    )
+    await session.execute(
+        text("SET pg_trgm.word_similarity_threshold = :word_threshold"),
+        {"word_threshold": WORD_SIM_INN_THRESHOLD},
+    )
+
+    pa_lower = func.lower(func.coalesce(Medicamento.principio_activo, ""))
+    trgm_sim  = func.similarity(pa_lower, inn_query)
+    word_sim  = func.word_similarity(inn_query, pa_lower)
+    inn_score_expr = func.greatest(trgm_sim, word_sim).label("inn_score")
+
     stmt = (
         select(
             Medicamento.id,
@@ -385,17 +479,14 @@ async def _stage2_fuzzy(
             Medicamento.forma_farmaceutica,
             Medicamento.nombre_limpio,
             MedicamentoCUM.concentracion,
-            func.similarity(
-                func.lower(func.coalesce(Medicamento.principio_activo, "")),
-                inn_query,
-            ).label("inn_score"),
+            inn_score_expr,
         )
         .outerjoin(MedicamentoCUM, Medicamento.id_cum == MedicamentoCUM.id_cum)
         .where(
-            func.similarity(
-                func.lower(func.coalesce(Medicamento.principio_activo, "")),
-                inn_query,
-            ) > TRGM_INN_THRESHOLD
+            # Use pg_trgm operators so the GIN index can accelerate the WHERE scan.
+            # % is the similarity operator (requires similarity_threshold SET above).
+            # <% is the word_similarity operator (requires word_similarity_threshold).
+            pa_lower.op("%")(inn_query) | literal(inn_query).op("<%")(pa_lower)
         )
         .where(Medicamento.activo == True)  # noqa: E712
         .order_by(text("inn_score DESC"))
@@ -581,7 +672,14 @@ async def match_drug(
 
     # ── Stage 3: NO_MATCH — build closest-candidate record for review queue ──
     logger.info("match_drug: NO_MATCH for %r", drug.raw_input)
-    closest = await _get_closest_candidate_for_review(session, inn_query)
+    # Skip closest-candidate lookup for combo drugs: the INVIMA catalog stores
+    # only mono-components, so a combo INN (e.g. "abacavir / lamivudine") will
+    # never have a meaningful closest candidate.  Skipping prevents an expensive
+    # sequential scan for ~half of all NO_MATCH results.
+    if " / " not in inn_query:
+        closest = await _get_closest_candidate_for_review(session, inn_query)
+    else:
+        closest = None
     return MatchResult(
         stage=MatchStage.NO_MATCH,
         confidence=0.0,

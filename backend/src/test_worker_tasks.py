@@ -2,12 +2,11 @@ import unittest
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
-from app.worker.tasks import (
-    _cleanup_temp_file,
+from app.worker.utils import _cleanup_temp_file, _run_async_safely
+from app.services.legacy_import_service import (
     _es_nombre_valido,
     _normalize_bool,
     _normalize_decimal,
-    _run_async_safely,
 )
 
 

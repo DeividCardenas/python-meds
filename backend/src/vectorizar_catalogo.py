@@ -5,7 +5,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types as genai_types
 import pandas as pd
 import psycopg2
 from dotenv import load_dotenv
@@ -135,16 +136,16 @@ def _to_pgvector(values: Iterable[float]) -> str:
     return "[" + ",".join(f"{value:.8f}" for value in values) + "]"
 
 
-def _embed_text(text: str) -> List[float]:
+def _embed_text(client: genai.Client, text: str) -> List[float]:
     last_error = None
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            response = genai.embed_content(
+            response = client.models.embed_content(
                 model=EMBEDDING_MODEL,
-                content=text,
-                task_type="retrieval_document",
+                contents=text,
+                config=genai_types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT"),
             )
-            vector = response["embedding"]
+            vector = response.embeddings[0].values
             if len(vector) != 768:
                 raise ValueError(f"Dimensión inválida: {len(vector)}. Se esperaban 768.")
             time.sleep(SLEEP_SECONDS)
@@ -189,7 +190,7 @@ def main() -> None:
     if not SOURCE_FILE.exists():
         raise FileNotFoundError(f"No existe el archivo fuente: {SOURCE_FILE}")
 
-    genai.configure(api_key=api_key)
+    client = genai.Client(api_key=api_key)
 
     df = pd.read_excel(SOURCE_FILE)
     run_date = datetime.now().strftime("%Y%m%d")
@@ -252,7 +253,7 @@ def main() -> None:
         embeddings_cache: Dict[str, str] = {}
         for idx, medicine_name in enumerate(unique_names, start=1):
             try:
-                embedding = _embed_text(medicine_name)
+                embedding = _embed_text(client, medicine_name)
                 embeddings_cache[medicine_name] = _to_pgvector(embedding)
                 if idx % INSERT_BATCH_SIZE == 0:
                     print(f"Procesados {idx}/{len(unique_names)} medicamentos únicos...")

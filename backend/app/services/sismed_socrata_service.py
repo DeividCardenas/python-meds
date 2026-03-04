@@ -514,8 +514,11 @@ async def sincronizar_precios_sismed(
         headers["X-App-Token"] = SOCRATA_APP_TOKEN
 
     logger.info("Iniciando sincronización SISMED: %s", SISMED_ENDPOINT)
+    # Timeout por request: 60 s de conexión + 180 s de lectura (dataset grande).
+    # No se limita el total de la sesión para que la paginación completa pueda terminar.
+    _timeout = aiohttp.ClientTimeout(total=None, sock_connect=60, sock_read=180)
     try:
-        async with aiohttp.ClientSession(headers=headers) as http_session:
+        async with aiohttp.ClientSession(headers=headers, timeout=_timeout) as http_session:
             total = await _fetch_sismed(http_session, session_factory)
 
         logger.info("SISMED sincronización completada. Total registros: %s", total)

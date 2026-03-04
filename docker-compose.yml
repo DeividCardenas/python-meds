@@ -4,8 +4,8 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-genhospi_catalog}
       POSTGRES_USER: ${POSTGRES_USER:-genhospi_admin}
-      # SECURITY: always override this via .env in any real environment
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-genhospi2026}
+      # SECURITY: sin fallback — definir POSTGRES_PASSWORD en el archivo .env
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
       # Host port 5433 → container port 5432 to avoid local conflicts
       - "${POSTGRES_PORT:-5433}:5432"
@@ -22,21 +22,30 @@ services:
 
   redis:
     image: redis:7-alpine
+    # SECURITY: Redis con autenticación obligatoria — definir REDIS_PASSWORD en .env
+    command: redis-server --requirepass ${REDIS_PASSWORD}
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      # SECURITY: bind solo a loopback para evitar acceso externo no intencionado
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     networks:
       - meds-network
 
   backend:
     build: ./backend
-    command: sh -c "alembic upgrade head && alembic -c alembic_pricing.ini upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    # --reload eliminado: activa watchfiles que consume CPU y produce starvation
+    # del event loop bajo carga concurrente (Anomalía 5 k6, p(99)/health=1.82s).
+    # --workers 2: dos procesos ASGI independientes; aisla la carga entre requests.
+    # Para desarrollo con hot-reload, usar: uvicorn ... --reload --workers 1
+    command: sh -c "alembic upgrade head && alembic -c alembic_pricing.ini upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2"
     environment:
-      DATABASE_URL: ${DB_CATALOG_URL:-postgresql+asyncpg://genhospi_admin:genhospi2026@db:5432/genhospi_catalog}
-      DB_URL: ${DB_CATALOG_URL:-postgresql+asyncpg://genhospi_admin:genhospi2026@db:5432/genhospi_catalog}
-      DB_CATALOG_URL: ${DB_CATALOG_URL:-postgresql+asyncpg://genhospi_admin:genhospi2026@db:5432/genhospi_catalog}
-      DB_PRICING_URL: ${DB_PRICING_URL:-postgresql+asyncpg://genhospi_admin:genhospi2026@db:5432/genhospi_pricing}
-      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
-      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
+      # SECURITY: sin fallback con contraseñas — todas las URLs deben definirse en .env
+      DATABASE_URL: ${DB_CATALOG_URL}
+      DB_URL: ${DB_CATALOG_URL}
+      DB_CATALOG_URL: ${DB_CATALOG_URL}
+      DB_PRICING_URL: ${DB_PRICING_URL}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
       OPENAI_KEY: ${OPENAI_KEY:-}
       SOCRATA_APP_TOKEN: ${SOCRATA_APP_TOKEN:-}
       CUM_BATCH_SIZE: ${CUM_BATCH_SIZE:-2000}
@@ -57,18 +66,22 @@ services:
     build: ./backend
     command: sh -c "celery -A app.worker.tasks.celery_app worker --loglevel=info"
     environment:
-      DATABASE_URL: ${DB_CATALOG_URL:-postgresql+asyncpg://genhospi_admin:genhospi2026@db:5432/genhospi_catalog}
-      DB_URL: ${DB_CATALOG_URL:-postgresql+asyncpg://genhospi_admin:genhospi2026@db:5432/genhospi_catalog}
-      DB_CATALOG_URL: ${DB_CATALOG_URL:-postgresql+asyncpg://genhospi_admin:genhospi2026@db:5432/genhospi_catalog}
-      DB_PRICING_URL: ${DB_PRICING_URL:-postgresql+asyncpg://genhospi_admin:genhospi2026@db:5432/genhospi_pricing}
-      CELERY_BROKER_URL: ${CELERY_BROKER_URL:-redis://redis:6379/0}
-      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
+      # SECURITY: sin fallback con contraseñas — todas las URLs deben definirse en .env
+      DATABASE_URL: ${DB_CATALOG_URL}
+      DB_URL: ${DB_CATALOG_URL}
+      DB_CATALOG_URL: ${DB_CATALOG_URL}
+      DB_PRICING_URL: ${DB_PRICING_URL}
+      CELERY_BROKER_URL: ${CELERY_BROKER_URL}
+      CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND}
       OPENAI_KEY: ${OPENAI_KEY:-}
       SOCRATA_APP_TOKEN: ${SOCRATA_APP_TOKEN:-}
       CUM_BATCH_SIZE: ${CUM_BATCH_SIZE:-2000}
       PYTHONPATH: /app
     volumes:
-      - ./backend:/app
+      # SECURITY: el worker solo necesita acceso a uploads y output,
+      # no al código fuente completo. En producción, eliminar este volumen
+      # y confiar en la imagen Docker construida (sin bind-mount de código).
+      - ./backend/uploads:/app/uploads
     depends_on:
       db:
         condition: service_healthy

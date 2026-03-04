@@ -1,7 +1,8 @@
 import os
 from typing import List, Optional, Tuple
 
-import google.generativeai as genai
+from google import genai
+from google.genai import types as genai_types
 import psycopg2
 from dotenv import load_dotenv
 
@@ -23,12 +24,12 @@ def buscar_similares(
     if not api_key:
         raise EnvironmentError("Falta GOOGLE_API_KEY en variables de entorno.")
 
-    genai.configure(api_key=api_key)
-    query_embedding = genai.embed_content(
+    client = genai.Client(api_key=api_key)
+    query_embedding = client.models.embed_content(
         model=EMBEDDING_MODEL,
-        content=texto_busqueda,
-        task_type="retrieval_query",
-    )["embedding"]
+        contents=texto_busqueda,
+        config=genai_types.EmbedContentConfig(task_type="RETRIEVAL_QUERY"),
+    ).embeddings[0].values
     query_vector = _to_pgvector(query_embedding)
 
     connection = None

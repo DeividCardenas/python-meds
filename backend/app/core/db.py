@@ -24,24 +24,30 @@ PRICING_URL = os.getenv(
 )
 
 # --- Catalog engine ----------------------------------------------------------
+# pool_size=30 + max_overflow=20 → 50 conexiones máx.
+# Dimensionado para 50 VUs de comparativaPrecios (3 queries/request) sin queueing.
+# pool_timeout=10 falla rápido en lugar de esperar 30 s (default SQLAlchemy).
 engine: AsyncEngine = create_async_engine(
     CATALOG_URL,
     echo=False,
     future=True,
-    pool_size=20,
-    max_overflow=10,
+    pool_size=30,
+    max_overflow=20,
     pool_pre_ping=True,
+    pool_timeout=10,
 )
 AsyncSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
 # --- Pricing engine ----------------------------------------------------------
+# pool_size=15 + max_overflow=10 → 25 conexiones máx para operaciones de pricing.
 pricing_engine: AsyncEngine = create_async_engine(
     PRICING_URL,
     echo=False,
     future=True,
-    pool_size=10,
-    max_overflow=5,
+    pool_size=15,
+    max_overflow=10,
     pool_pre_ping=True,
+    pool_timeout=10,
 )
 AsyncPricingSessionLocal = async_sessionmaker(pricing_engine, class_=AsyncSession, expire_on_commit=False)
 

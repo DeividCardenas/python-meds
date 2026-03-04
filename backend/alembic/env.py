@@ -11,6 +11,7 @@ from sqlmodel import SQLModel
 
 from app.models import medicamento  # noqa: F401
 from app.models import pricing  # noqa: F401
+from app.services import matching_engine  # noqa: F401  — registers DrugSynonymDictEntry
 
 
 config = context.config

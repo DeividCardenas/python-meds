@@ -9,11 +9,12 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import polars as pl
-from sqlalchemy import func, text
+from sqlalchemy import bindparam, func, text
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.models.medicamento import CargaStatus, Medicamento
+from app.models.enums import CargaStatus
+from app.models.medicamento import Medicamento
 from app.models.pricing import ProveedorArchivo, StagingPrecioProveedor
 from app.services.normalizer import normalize_dataframe_column, normalize_pharma_text
 from app.services.supplier_detector import detectar_proveedor
@@ -173,11 +174,17 @@ async def buscar_sugerencias_cum(
     if not normalized:
         return []
 
-    # FTS with similarity fallback
-    tsvector_expr = func.to_tsvector("simple", func.lower(Medicamento.nombre_limpio))
-    tsquery_expr = func.plainto_tsquery("simple", normalized)
-    rank_expr = func.ts_rank_cd(tsvector_expr, tsquery_expr).label("rank")
-    similarity_expr = func.similarity(func.lower(Medicamento.nombre_limpio), normalized).label("similarity")
+    # FTS sobre columna STORED GENERATED nombre_tsvector (migración 0018).
+    # Usa el índice GIN ix_medicamentos_nombre_tsvector_gin → evita seqscan.
+    # El OR % se eliminó: forzaba Bitmap OR scan + similarity() sobre cientos
+    # de filas antes del LIMIT, causing p(95)=1.32s. Con FTS puro + normalize_pharma_text
+    # el recall es suficiente y similarity() sólo se calcula en las filas del LIMIT.
+    tsquery_expr = func.plainto_tsquery("simple", bindparam("tsq_text"))
+    rank_expr = func.ts_rank_cd(Medicamento.nombre_tsvector, tsquery_expr).label("rank")
+    # similarity() sólo en SELECT/ORDER BY — no en WHERE — para no forzar seqscan.
+    similarity_expr = func.similarity(
+        func.lower(Medicamento.nombre_limpio), bindparam("sim_text")
+    ).label("similarity")
 
     stmt = (
         select(
@@ -189,12 +196,12 @@ async def buscar_sugerencias_cum(
             similarity_expr,
         )
         .where(
-            tsvector_expr.op("@@")(tsquery_expr)
-            | (similarity_expr > text("0.2"))
+            # GIN tsvector index → O(log N + k), sin Bitmap OR scan
+            Medicamento.nombre_tsvector.op("@@")(tsquery_expr)
         )
         .order_by(rank_expr.desc(), similarity_expr.desc())
         .limit(limite)
-    )
+    ).params(tsq_text=normalized, sim_text=normalized)
 
     rows = (await session.exec(stmt)).all()
     return [
@@ -311,7 +318,7 @@ async def procesar_archivo_proveedor(
             # Rows without a CUM code start at None; the score is set after
             # fuzzy resolution below.
             confianza_score: Decimal | None = Decimal("1.0") if cum_code else None
-            estado = "APROBADO" if cum_code else "PENDIENTE"
+            estado = "AUTO_APROBADO" if cum_code else "PENDIENTE"
 
             staging_rows.append(
                 {
@@ -356,7 +363,7 @@ async def procesar_archivo_proveedor(
                         row["confianza_score"] = Decimal(str(round(best_score, 4)))
                         if best_score >= AUTO_APPROVE_THRESHOLD:
                             row["cum_code"] = sugerencias[0]["id_cum"]
-                            row["estado_homologacion"] = "APROBADO"
+                            row["estado_homologacion"] = "AUTO_APROBADO"
 
         # ── Resolve medicamento_id for ALL rows with a known CUM code ──────
         # This covers both rows with a direct CUM from the supplier file and
@@ -468,17 +475,24 @@ async def publicar_precios_aprobados(
             if archivo is None:
                 raise ValueError(f"ProveedorArchivo {archivo_id} no encontrado")
 
-            # Step 2 – select all APROBADO staging rows
+            # Guard: prevent duplicate publishing
+            if archivo.status == CargaStatus.PUBLICADO:
+                raise ValueError(
+                    f"El archivo {archivo_id} ya fue publicado anteriormente. "
+                    "No se permite re-publicar el mismo archivo para evitar duplicados en precios_proveedor."
+                )
+
+            # Step 2 – select all APROBADO and AUTO_APROBADO staging rows
             stmt = (
                 select(StagingPrecioProveedor)
                 .where(StagingPrecioProveedor.archivo_id == archivo_uuid)
-                .where(StagingPrecioProveedor.estado_homologacion == "APROBADO")
+                .where(StagingPrecioProveedor.estado_homologacion.in_(["APROBADO", "AUTO_APROBADO"]))
             )
             filas = (await session.exec(stmt)).all()
 
             if not filas:
                 raise ValueError(
-                    f"No hay filas con estado APROBADO para el archivo {archivo_id}. "
+                    f"No hay filas con estado APROBADO o AUTO_APROBADO para el archivo {archivo_id}. "
                     "Revisa y aprueba filas en la pantalla de homologación antes de publicar."
                 )
 

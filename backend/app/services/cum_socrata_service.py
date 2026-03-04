@@ -585,7 +585,7 @@ async def poblar_medicamentos_desde_cum(
                         COALESCE(c.descripcioncomercial, c.producto, '')
                             || ' '
                             || COALESCE(c.principioactivo, ''),
-                        '\s+',
+                        '\\s+',
                         ' ',
                         'g'
                     )

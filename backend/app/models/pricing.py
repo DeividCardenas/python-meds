@@ -10,7 +10,7 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlmodel import Field, SQLModel
 
-from app.models.medicamento import CargaStatus
+from app.models.enums import CargaStatus
 
 
 class Proveedor(SQLModel, table=True):
@@ -220,8 +220,9 @@ class PrecioProveedor(SQLModel, table=True):
     )
     # Traceability: FK back to the staging row that originated this record.
     # Soft reference — no DB-level FK so we can delete staging rows later.
+    # unique=True prevents duplicate publishes of the same staging row.
     staging_id: UUID = Field(
-        sa_column=Column(PGUUID(as_uuid=True), nullable=False, index=True),
+        sa_column=Column(PGUUID(as_uuid=True), nullable=False, index=True, unique=True),
     )
     # FK to the upload batch
     archivo_id: UUID = Field(

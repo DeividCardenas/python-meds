@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -28,28 +29,32 @@ def _obtener_embedding_query(texto: str) -> list[float] | None:
     if not api_key:
         return None
     try:
-        import google.generativeai as genai
+        from google import genai
+        from google.genai import types as genai_types
     except ImportError:
         return None
-    try:
-        from google.api_core.exceptions import GoogleAPIError
-    except ImportError:
-        GoogleAPIError = RuntimeError
 
     try:
-        genai.configure(api_key=api_key)
-        embedding = genai.embed_content(
+        client = genai.Client(api_key=api_key)
+        embedding = client.models.embed_content(
             model=EMBEDDING_MODEL,
-            content=texto,
-            task_type="retrieval_query",
-        )["embedding"]
-    except (GoogleAPIError, ConnectionError, TimeoutError, KeyError, TypeError, ValueError) as exc:
+            contents=texto,
+            config=genai_types.EmbedContentConfig(task_type="RETRIEVAL_QUERY"),
+        ).embeddings[0].values
+    except (ConnectionError, TimeoutError, KeyError, TypeError, ValueError, Exception) as exc:
         logger.debug("No se pudo calcular embedding de búsqueda: %s", exc)
         return None
 
     if len(embedding) != EMBEDDING_DIMENSION:
         return None
     return embedding
+
+
+async def _obtener_embedding_query_async(texto: str) -> list[float] | None:
+    """Wrapper asíncrono: ejecuta la llamada HTTP síncrona a Google en un
+    thread pool para no bloquear el event loop de uvicorn (Anomalía 4)."""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _obtener_embedding_query, texto)
 
 
 async def buscar_medicamentos_hibrido(
@@ -63,7 +68,8 @@ async def buscar_medicamentos_hibrido(
     if not texto_preparado:
         return []
 
-    query_embedding = _obtener_embedding_query(texto_preparado)
+    # Llamada asíncrona: la API de embeddings se ejecuta en thread pool (Fix 4).
+    query_embedding = await _obtener_embedding_query_async(texto_preparado)
     statement, params = _construir_statement_hibrido(
         texto_preparado=texto_preparado,
         empresa=empresa,
@@ -82,20 +88,12 @@ def _construir_statement_hibrido(
     forma_farmaceutica: Optional[str] = None,
 ):
 
-    nombre_preparado = func.regexp_replace(
-        func.regexp_replace(
-            func.lower(Medicamento.nombre_limpio),
-            r"([0-9])([[:alpha:]])",
-            r"\1 \2",
-            "g",
-        ),
-        r"([[:alpha:]])([0-9])",
-        r"\1 \2",
-        "g",
-    )
-    tsvector_expr = func.to_tsvector("simple", nombre_preparado)
+    # Usa la columna STORED GENERATED nombre_tsvector (migración 0018) para FTS.
+    # El índice GIN ix_medicamentos_nombre_tsvector_gin hace que @@ sea O(log N+k)
+    # en lugar de seqscan O(N) con to_tsvector() inline sobre regexp_replace.
+    # Fix para Anomalía 2 (ALTO): p(95) buscarMedicamentos 6.46s → < 1500ms.
     tsquery_expr = func.plainto_tsquery("simple", bindparam("texto_busqueda"))
-    rank_expr = func.ts_rank_cd(tsvector_expr, tsquery_expr).label("rank")
+    rank_expr = func.ts_rank_cd(Medicamento.nombre_tsvector, tsquery_expr).label("rank")
     if query_embedding:
         embedding_param = bindparam("query_embedding", type_=Vector(EMBEDDING_DIMENSION))
         distancia_expr = Medicamento.embedding.op("<=>")(embedding_param).label("distancia")
@@ -116,7 +114,7 @@ def _construir_statement_hibrido(
             Medicamento.estado_cum,
             rank_expr,
         )
-        .where(tsvector_expr.op("@@")(tsquery_expr))
+        .where(Medicamento.nombre_tsvector.op("@@")(tsquery_expr))
         .order_by(rank_expr.desc(), distancia_expr.asc(), Medicamento.nombre_limpio.asc())
         .limit(10)
     )

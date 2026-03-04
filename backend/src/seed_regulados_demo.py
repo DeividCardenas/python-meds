@@ -29,10 +29,8 @@ from app.models.medicamento import PrecioReguladoCNPMDM  # noqa: F401
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql+asyncpg://genhospi_admin:genhospi2026@db:5432/genhospi_catalog",
-)
+# SECURITY: no se aceptan fallbacks con credenciales — definir en el entorno o .env
+DATABASE_URL = os.environ["DATABASE_URL"]
 
 # ---------------------------------------------------------------------------
 # Principios activos regulados y precio máximo referencial (COP)
