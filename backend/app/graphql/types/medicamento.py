@@ -21,6 +21,9 @@ class MedicamentoNode:
     precio_maximo_regulado: Optional[float] = None
     activo: bool = True
     estado_cum: Optional[str] = None
+    # Mejor precio de proveedor cargado (solo populado en comparativaPrecios)
+    mejor_precio_proveedor: Optional[float] = None
+    mejor_proveedor_nombre: Optional[str] = None
 
 
 @strawberry.type

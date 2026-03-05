@@ -91,6 +91,13 @@ _UNIT_CANONICAL: dict[str, str] = {
     "mmol":         "mmol",
     # Percentage
     "%":            "%",
+    # Per-dose (inhalation / injectable)
+    "mcg/dosis":    "mcg/dosis",
+    "ug/dosis":     "mcg/dosis",
+    "µg/dosis":     "mcg/dosis",
+    "mg/dosis":     "mg/dosis",
+    "ui/dosis":     "IU/dosis",
+    "iu/dosis":     "IU/dosis",
     # Compound: mass / volume
     "mg/ml":        "mg/mL",
     "mg/dl":        "mg/dL",
@@ -235,9 +242,82 @@ _FORM_SYNONYMS: dict[str, str] = {
     "spray":                                "inhalador",
     "polvo para inhalacion":                "polvo para inhalacion",
     # Rectal / vaginal
-    "supositorio":                          "supositorio",
-    "supositorios":                         "supositorio",
-    "ovulo vaginal":                        "ovulo vaginal",
+    "supositorio":                              "supositorio",
+    "supositorios":                             "supositorio",
+    "ovulo vaginal":                            "ovulo vaginal",
+    # Capsule variants
+    "capsula blanda":                           "capsula blanda",
+    "capsulas blandas":                         "capsula blanda",
+    "capsula gelatinosa":                       "capsula blanda",
+    "capsula dura":                             "capsula",
+    "cápsula dura":                             "capsula",
+    "capsulas duras":                           "capsula",
+    "capsula dura para inhalacion":             "polvo para inhalacion",
+    "capsula de liberacion retardada":          "capsula de liberacion prolongada",
+    # Powders — distinct canonical to avoid wrong form extraction
+    "polvo para reconstituir a solucion oral":  "polvo para reconstitucion",
+    "polvo para reconstituir a suspension oral": "polvo para reconstitucion",
+    "polvo esteril para reconstituir":          "polvo para reconstitucion",
+    "polvo para reconstituir":                  "polvo para reconstitucion",
+    "polvo liofilizado":                        "polvo para reconstitucion",
+    "polvo liofilo":                            "polvo para reconstitucion",
+    "polvo efervescente":                       "polvo efervescente",
+    "polvo topico":                             "polvo topico",
+    # Solutions — concentrated / route variants
+    "solucion inyectable concentrada":          "solucion inyectable",
+    "solucion concentrada para infusion":       "solucion para infusion",
+    "solucion en aerosol":                      "inhalador",
+    "solucion intranasal":                      "spray nasal",
+    # Creams / gels — route variants
+    "crema vaginal":                            "crema vaginal",
+    "crema proctologica":                       "crema",
+    "gel oftalmico":                            "gel oftalmico",
+    # Granules
+    "granulos":                                 "granulos",
+    "granulos para solucion oral":              "granulos",
+    # Inhalation — combined descriptor variants (device + form)
+    "polvo para inhalacion inhalador":          "polvo para inhalacion",
+    "solucion en aerosol inhalador":            "inhalador",
+    "aerosol inhalador":                        "inhalador",
+    # Typo in hospital data: 'trasdermico' (missing 'n') vs canonical 'transdermico'
+    "parche trasdermico":                       "parche transdermico",
+    # ── Extended tablet variants ──────────────────────────────────────────────
+    "tableta de liberacion prolongada":         "tableta de liberacion prolongada",
+    "tabletas de liberacion prolongada":        "tableta de liberacion prolongada",
+    "tableta liberacion prolongada":            "tableta de liberacion prolongada",
+    "tableta de liberacion retardada":          "tableta de liberacion retardada",
+    "tabletas de liberacion retardada":         "tableta de liberacion retardada",
+    "tableta liberacion retardada":             "tableta de liberacion retardada",
+    "tableta de liberacion modificada":         "tableta de liberacion prolongada",
+    "tableta masticable":                       "tableta masticable",
+    "tabletas masticables":                     "tableta masticable",
+    "tableta sublingual":                       "tableta sublingual",
+    "tableta orodispersable":                   "tableta orodispersable",
+    "tableta dispersible":                      "tableta orodispersable",
+    "tableta vaginal":                          "tableta vaginal",
+    # ── Solution route variants ───────────────────────────────────────────────
+    "solucion para inhalacion":                 "solucion para inhalacion",
+    "solucion para nebulizacion":               "solucion para inhalacion",
+    "solucion nebulizable":                     "solucion para inhalacion",
+    "solucion otica":                           "solucion otica",
+    "gotas oticas":                             "solucion otica",
+    "solucion rectal":                          "solucion rectal",
+    # ── Topical / dermal ─────────────────────────────────────────────────────
+    "locion topica":                            "locion",
+    "suspension topica":                        "suspension topica",
+    "unguento oftalmico":                       "unguento oftalmico",
+    "unguento rectal":                          "unguento rectal",
+    "jalea":                                    "jalea",
+    "jalea topica":                             "jalea",
+    "jalea uretral":                            "jalea",
+    "gel uretral":                              "jalea",
+    "pasta":                                    "pasta",
+    "pasta topica":                             "pasta",
+    # ── Implants / IUDs ──────────────────────────────────────────────────────
+    "implante":                                 "implante",
+    "implante trasdermico":                     "implante",
+    "implante transdermico":                    "implante",
+    "dispositivo intrauterino":                 "dispositivo intrauterino",
 }
 
 # --- Form → FormGroup mapping ----------------------------------------------
@@ -270,12 +350,38 @@ _FORM_GROUP: dict[str, FormGroup] = {
     "parche transdermico":                  FormGroup.TOPICAL,
     "solucion oftalmica":                   FormGroup.OPHTHALMIC,
     "suspension oftalmica":                 FormGroup.OPHTHALMIC,
+    "gel oftalmico":                        FormGroup.OPHTHALMIC,
     "inhalador":                            FormGroup.INHALATION,
     "spray nasal":                          FormGroup.INHALATION,
     "polvo para inhalacion":                FormGroup.INHALATION,
     "supositorio":                          FormGroup.RECTAL_VAGINAL,
     "ovulo vaginal":                        FormGroup.RECTAL_VAGINAL,
     "ovulo":                                FormGroup.RECTAL_VAGINAL,
+    "crema vaginal":                        FormGroup.TOPICAL,
+    "capsula blanda":                       FormGroup.ORAL_SOLID,
+    "polvo topico":                         FormGroup.TOPICAL,
+    "granulos":                             FormGroup.ORAL_SOLID,
+    # ── Extended tablet variants ──
+    "tableta de liberacion prolongada":     FormGroup.ORAL_SOLID,
+    "tableta de liberacion retardada":      FormGroup.ORAL_SOLID,
+    "tableta masticable":                   FormGroup.ORAL_SOLID,
+    "tableta sublingual":                   FormGroup.ORAL_SOLID,
+    "tableta orodispersable":               FormGroup.ORAL_SOLID,
+    "tableta vaginal":                      FormGroup.RECTAL_VAGINAL,
+    # ── Solution route variants ──
+    "solucion para inhalacion":             FormGroup.INHALATION,
+    "solucion otica":                       FormGroup.OPHTHALMIC,
+    "solucion rectal":                      FormGroup.RECTAL_VAGINAL,
+    # ── Topical / dermal ──
+    "locion":                               FormGroup.TOPICAL,
+    "suspension topica":                    FormGroup.TOPICAL,
+    "unguento oftalmico":                   FormGroup.OPHTHALMIC,
+    "unguento rectal":                      FormGroup.RECTAL_VAGINAL,
+    "jalea":                                FormGroup.TOPICAL,
+    "pasta":                                FormGroup.TOPICAL,
+    # ── Implants / IUDs ──
+    "implante":                             FormGroup.OTHER,
+    "dispositivo intrauterino":             FormGroup.RECTAL_VAGINAL,
 }
 
 # Known forms sorted longest-first for greedy right-anchor matching
@@ -284,6 +390,63 @@ _KNOWN_FORMS_SORTED: list[str] = sorted(
     key=len,
     reverse=True,
 )
+
+# ---------------------------------------------------------------------------
+# Packaging / presentation suffix stripping
+# ---------------------------------------------------------------------------
+
+# Matches a trailing "x N unit" quantity spec, e.g. "x 4mL", "x 120 dosis",
+# "x 100 Unidades", "x 0,2mL".  The leading space is mandatory.
+_PACKAGING_QTY_RE = re.compile(
+    r"\s+x\s+\d+[.,]?\d*\s*(?:ml|g\b|l\b|mg|mcg|dosis|unidades?|uds?|u\b)\s*$",
+    re.IGNORECASE,
+)
+
+# Matches a trailing container/packaging word (with an optional preceding quantity),
+# e.g. "Vial", "Frasco gotero", "Jeringa prellenada", "Ampolla", "Sobre",
+# "Tubo", "Caja", "Par", "Lapicero", "Cartucho", "Ampula", "Implante".
+_PACKAGING_CONTAINER_RE = re.compile(
+    r"""\s+
+    (?:
+        frasco(?:\s+gotero)?       # Frasco / Frasco gotero
+      | vial
+      | jeringa(?:\s+prellenada)?  # Jeringa / Jeringa prellenada
+      | ampolla
+      | ampula                     # variant spelling in hospital CSV
+      | sobre
+      | tubo
+      | caja
+      | lapicero                   # insulin pen — "Lapicero x 3mL"
+      | cartucho                   # insulin cartridge — "Cartucho x 1,5mL"
+      | implante                   # subcutaneous implant presentation
+      | par\b                     # Par (paired gloves/items)
+    )
+    \s*$""",
+    re.VERBOSE | re.IGNORECASE,
+)
+
+
+def _strip_packaging_suffix(text: str) -> str:
+    """
+    Iteratively remove trailing packaging / presentation noise tokens that
+    appear *after* the pharmaceutical form in hospital formulary entries.
+
+    Examples stripped
+    -----------------
+    "Solucion inyectable Vial x 4mL"             → "Solucion inyectable"
+    "Suspension oral Frasco x 100mL"             → "Suspension oral"
+    "Polvo para inhalacion Inhalador x 120 dosis" → "Polvo para inhalacion Inhalador"
+    "Solucion inyectable Jeringa prellenada x 0,2mL" → "Solucion inyectable"
+    "Solucion inyectable Ampolla x 1mL"          → "Solucion inyectable"
+    "Polvo esteril para reconstituir Vial"       → "Polvo esteril para reconstituir"
+    "Crema vaginal Tubo x 43g"                   → "Crema vaginal"
+    """
+    prev = None
+    while prev != text:
+        prev = text
+        text = _PACKAGING_QTY_RE.sub("", text).strip()
+        text = _PACKAGING_CONTAINER_RE.sub("", text).strip()
+    return text
 
 # ---------------------------------------------------------------------------
 # Compiled regex patterns
@@ -757,7 +920,9 @@ def _normalize_inn_text(raw: str) -> str:
     # Strip common salt / qualifier suffixes (not INN-defining in catalog)
     qualifier_re = re.compile(
         r"\b(?:clorhidrato|hidrocloruro|sodico|potasico|calcico|acetato|"
-        r"fosfato|sulfato|bromuro|maleato|fumarato|tartrato|base)\b",
+        r"fosfato|sulfato|bromuro|maleato|fumarato|tartrato|base|"
+        r"mesilato|mesilas|trihidrato|monohidrato|dihidrato|etabonato|"
+        r"anhidro|besylato)\b",
         re.IGNORECASE,
     )
     ascii_inn = qualifier_re.sub(" ", ascii_inn)
@@ -855,6 +1020,10 @@ def parse(raw: str) -> ParsedDrug:
     # 1a. Extract and remove delimited blocks
     after_delimiters, bracket_contents, paren_contents = _extract_delimited_blocks(sanitized)
 
+    # 1a'. Strip trailing packaging / presentation noise *before* form extraction
+    # so that "Solucion inyectable Vial x 4mL" correctly yields "solucion inyectable".
+    after_delimiters = _strip_packaging_suffix(after_delimiters)
+
     # 1b. Extract trailing pharmaceutical form (right-anchored)
     after_form, raw_form = _extract_trailing_form(after_delimiters)
 
@@ -902,8 +1071,30 @@ def parse(raw: str) -> ParsedDrug:
     #   - For combo drugs: each component gets one inline concentration
     #   - For bracket without inline: use bracket only
     if len(inn_parts) > 1:
-        # Combo drug: concentrations order matches inn_parts order
-        all_concentrations = inline_concentrations
+        # Combo drug: concentrations order must match inn_parts order.
+        # Primary source: inline doses extracted per-segment (step 1d/1e).
+        # Fallback: when all doses were written inside a single bracket
+        # (e.g. "[3mg + 3mg/mL]" or "[300mg + 100UI + 7,5mg/5mL]"), split
+        # that bracket on "+" and parse each part individually.
+        if inline_concentrations:
+            all_concentrations = inline_concentrations
+        elif bracket_contents:
+            combo_concs: list[NormalizedConcentration] = []
+            for bc in bracket_contents:
+                if "+" in bc:
+                    for part in [p.strip() for p in bc.split("+") if p.strip()]:
+                        conc = _parse_inline_dose(part, warnings)
+                        if conc is None:
+                            conc = _parse_bracket_concentration(part, warnings)
+                        if conc:
+                            combo_concs.append(conc)
+                else:
+                    conc = _parse_bracket_concentration(bc, warnings)
+                    if conc:
+                        combo_concs.append(conc)
+            all_concentrations = combo_concs
+        else:
+            all_concentrations = []
     else:
         # Single drug: prefer bracket_ratio, keep all variants
         all_concentrations = bracket_concentrations + inline_concentrations
@@ -919,8 +1110,10 @@ def parse(raw: str) -> ParsedDrug:
         comp   = _build_drug_component(inn_raw, parens, warnings)
         components.append(comp)
 
-    # 2d. For combo drugs, validate component ↔ concentration parity
-    if len(components) > 1 and len(inline_concentrations) != len(components):
+    # 2d. For combo drugs, validate component ↔ concentration parity.
+    # Use all_concentrations (which includes bracket-split doses for combos)
+    # rather than inline_concentrations alone.
+    if len(components) > 1 and len(all_concentrations) != len(components):
         warnings.append(ParseWarningCode.COMPONENT_COUNT_MISMATCH)
 
     # If no INN was extracted at all, use the full sanitized text

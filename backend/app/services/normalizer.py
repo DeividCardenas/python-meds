@@ -42,18 +42,65 @@ _FORM_NOISE = re.compile(
 _DIG_LETTER = re.compile(r"([0-9])([A-Za-zÁÉÍÓÚÜÑáéíóúüñ])")
 _LETTER_DIG = re.compile(r"([A-Za-zÁÉÍÓÚÜÑáéíóúüñ])([0-9])")
 
+# ---------------------------------------------------------------------------
+# Supplier-specific normalisation helpers
+# ---------------------------------------------------------------------------
+
+# Salt / polymorph qualifiers that are NOT part of the canonical INN.
+# Stripping them improves FTS recall: "Amoxicilina Trihidrato 875 mg"
+# becomes "amoxicilina 875 mg" which matches the catalog entry.
+_SALT_QUALIFIERS = re.compile(
+    r"\b(?:clorhidrato|hidrocloruro|trihidrato|monohidrato|dihidrato|"
+    r"anhidro|mesilato|mesilas|etabonato|besylato|tartrato|maleato|"
+    r"fumarato|gluconato)\b",
+    re.IGNORECASE,
+)
+
+# Concatenated packaging tokens used in some supplier formats (e.g. LA SANTE).
+# Applied BEFORE digit/letter spacing so the full token is matched:
+#   "PPSFCOX50ML" → removed (not "ppsfcox 50 ml" left in the query)
+_CONCAT_PACKAGING_NOISE = re.compile(
+    r"\b(?:ppsfcox|fcox|cjax|jbefcox|grancjax|cjaxsob|fcoxsob)\d+\w*\b",
+    re.IGNORECASE,
+)
+
+# Provider-specific trailing codes that carry no pharmacological information.
+# Applied AFTER step 5 (non-alnum strip) so only standalone tokens remain:
+#   "COL" (country), "EOF" (end-of-formulary), "NI" (no incluido), etc.
+_PROVIDER_SUFFIX_NOISE = re.compile(
+    r"\b(?:col|eof|ni|pps|fco|cja|jbe|sob)\b",
+    re.IGNORECASE,
+)
+
+# Pharmaceutical abbreviations used by some suppliers (e.g. LA SANTE).
+# Keys are *lower-cased* abbreviated forms; values are the full INN.
+_PHARMA_ABBREVIATIONS: dict[str, str] = {
+    "claritromi": "claritromicina",
+    "gluco": "glucosamina",
+    "condro": "condroitin",
+}
+# Pre-compile so we do a single regex pass per string (longest match first)
+_ABBREV_WORDS_RE = re.compile(
+    r"\b(" + "|".join(re.escape(k) for k in sorted(_PHARMA_ABBREVIATIONS, key=len, reverse=True)) + r")\b",
+    re.IGNORECASE,
+)
+
 
 def normalize_pharma_text(text: str) -> str:
     """
     Apply deterministic normalization to a single pharmaceutical product name.
 
     Pipeline:
-      1. Normalize Unicode (NFKD) and strip accents → lowercase ASCII
-      2. Insert space between digit/letter boundaries
-      3. Strip packaging/quantity noise (e.g. "CAJA X 30")
-      4. Strip dosage form noise
-      5. Remove non-alphanumeric characters except spaces
-      6. Collapse whitespace
+      1.   Normalize Unicode (NFKD) and strip accents → lowercase ASCII
+      1.5. Expand supplier-specific pharmaceutical abbreviations
+      1.6. Strip concatenated packaging codes (e.g. "PPSFCOX50ML", "CJAX4")
+      2.   Insert space between digit/letter boundaries
+      3.   Strip packaging/quantity noise (e.g. "CAJA X 30")
+      4.   Strip dosage form noise
+      4.5. Strip salt/polymorph qualifiers (e.g. "Trihidrato", "Mesilato")
+      5.   Remove non-alphanumeric characters except spaces
+      5.5. Strip provider-specific trailing codes (COL, EOF, NI, PPS…)
+      6.   Collapse whitespace
 
     Returns the cleaned lowercase ASCII string, or ``""`` for empty input.
     """
@@ -63,6 +110,14 @@ def normalize_pharma_text(text: str) -> str:
     # 1. Unicode normalization → strip accents → lowercase
     nfkd = unicodedata.normalize("NFKD", text)
     ascii_text = nfkd.encode("ascii", "ignore").decode("ascii").lower()
+
+    # 1.5. Expand supplier-specific abbreviations (e.g. "CLARITROMI" → "claritromicina")
+    ascii_text = _ABBREV_WORDS_RE.sub(
+        lambda m: _PHARMA_ABBREVIATIONS[m.group(0).lower()], ascii_text
+    )
+
+    # 1.6. Strip concatenated packaging codes before digit/letter spacing
+    ascii_text = _CONCAT_PACKAGING_NOISE.sub(" ", ascii_text)
 
     # 2. Space between digits and letters
     ascii_text = _DIG_LETTER.sub(r"\1 \2", ascii_text)
@@ -74,8 +129,14 @@ def normalize_pharma_text(text: str) -> str:
     # 4. Strip dosage form noise
     ascii_text = _FORM_NOISE.sub(" ", ascii_text)
 
+    # 4.5. Strip salt/polymorph qualifiers for better INN matching
+    ascii_text = _SALT_QUALIFIERS.sub(" ", ascii_text)
+
     # 5. Remove non-alphanumeric (keep spaces)
     ascii_text = re.sub(r"[^0-9a-z\s]", " ", ascii_text)
+
+    # 5.5. Strip provider-specific suffix codes (COL, EOF, NI, PPS, etc.)
+    ascii_text = _PROVIDER_SUFFIX_NOISE.sub(" ", ascii_text)
 
     # 6. Collapse whitespace
     return re.sub(r"\s+", " ", ascii_text).strip()

@@ -389,10 +389,10 @@ export function BuscadorMedicamentos() {
                   <tr>
                     <th className="px-3 py-2">Medicamento</th>
                     <th className="px-3 py-2">Laboratorio</th>
-                    <th className="px-3 py-2">Precio Unitario</th>
-                    <th className="px-3 py-2">Precio Empaque</th>
-                    <th className="px-3 py-2">Regulado</th>
-                    <th className="px-3 py-2">Precio Máximo</th>
+                    <th className="px-3 py-2 text-right">P. Ref. SISMED</th>
+                    <th className="px-3 py-2 text-right">Mejor precio cargado</th>
+                    <th className="px-3 py-2 text-center">Regulado</th>
+                    <th className="px-3 py-2 text-right">Tope máx.</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -403,26 +403,86 @@ export function BuscadorMedicamentos() {
                       </td>
                     </tr>
                   ) : comparativaResultados.length > 0 ? (
-                    comparativaResultados.map((item) => (
-                      <tr key={item.id} className="border-t border-slate-100">
-                        <td className="px-3 py-2">{toTitleCase(item.nombreLimpio)}</td>
-                        <td className="px-3 py-2">{toTitleCase(item.laboratorio) || "-"}</td>
-                        <td className="px-3 py-2">{formatPrice(item.precioUnitario) || "-"}</td>
-                        <td className="px-3 py-2">{formatPrice(item.precioEmpaque) || "-"}</td>
-                        <td className="px-3 py-2">
-                          {item.esRegulado ? (
-                            <span className="inline-flex rounded-full bg-orange-100 px-2 py-0.5 text-xs font-semibold text-orange-700">
-                              🔒 Regulado
-                            </span>
-                          ) : (
-                            <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-400">
-                              No regulado
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2">{formatPrice(item.precioMaximoRegulado) || "-"}</td>
-                      </tr>
-                    ))
+                    (() => {
+                      // Determinar la mejor opción: menor precio proveedor primero, luego SISMED
+                      // Para regulados, solo considerar precios ≤ tope
+                      const getEfectivo = (item: (typeof comparativaResultados)[number]) => {
+                        const pp = item.mejorPrecioProveedor ?? null;
+                        const ss = item.precioUnitario ?? null;
+                        const tope = item.precioMaximoRegulado ?? null;
+                        if (item.esRegulado && tope != null) {
+                          const ppOk = pp != null && pp <= tope ? pp : null;
+                          const ssOk = ss != null && ss <= tope ? ss : null;
+                          if (ppOk != null && ssOk != null) return Math.min(ppOk, ssOk);
+                          return ppOk ?? ssOk ?? pp ?? ss;
+                        }
+                        if (pp != null && ss != null) return Math.min(pp, ss);
+                        return pp ?? ss;
+                      };
+                      const efectivos = comparativaResultados.map(getEfectivo);
+                      const minEfectivo = efectivos.reduce<number | null>(
+                        (m, v) => (v != null && (m == null || v < m) ? v : m),
+                        null,
+                      );
+                      return comparativaResultados.map((item, idx) => {
+                        const esMejor = efectivos[idx] != null && efectivos[idx] === minEfectivo;
+                        const ppExcede = item.esRegulado && item.precioMaximoRegulado != null
+                          && item.mejorPrecioProveedor != null
+                          && item.mejorPrecioProveedor > item.precioMaximoRegulado;
+                        return (
+                          <tr
+                            key={item.id}
+                            className={`border-t border-slate-100 ${esMejor ? "bg-emerald-50" : ""}`}
+                          >
+                            <td className="px-3 py-2 font-medium">
+                              <span className="flex items-center gap-2">
+                                {esMejor && (
+                                  <span className="inline-flex items-center rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-700">
+                                    ★ Mejor
+                                  </span>
+                                )}
+                                {toTitleCase(item.nombreLimpio)}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2 text-slate-500">{toTitleCase(item.laboratorio) || "-"}</td>
+                            <td className="px-3 py-2 text-right text-slate-500 tabular-nums">
+                              {formatPrice(item.precioUnitario) || "-"}
+                            </td>
+                            <td className="px-3 py-2 text-right tabular-nums">
+                              {item.mejorPrecioProveedor != null ? (
+                                <span className="flex flex-col items-end gap-0.5">
+                                  <span className={`font-semibold ${ppExcede ? "text-red-600" : "text-teal-700"}`}>
+                                    {formatPrice(item.mejorPrecioProveedor)}
+                                  </span>
+                                  {item.mejorProveedorNombre && (
+                                    <span className="text-[10px] text-slate-400">{item.mejorProveedorNombre}</span>
+                                  )}
+                                  {ppExcede && (
+                                    <span className="text-[10px] font-semibold text-red-500">⚠ Excede tope</span>
+                                  )}
+                                </span>
+                              ) : (
+                                <span className="text-slate-300">Sin precio</span>
+                              )}
+                            </td>
+                            <td className="px-3 py-2 text-center">
+                              {item.esRegulado ? (
+                                <span className="inline-flex rounded-full bg-orange-100 px-2 py-0.5 text-xs font-semibold text-orange-700">
+                                  🔒 Regulado
+                                </span>
+                              ) : (
+                                <span className="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-400">
+                                  No regulado
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-3 py-2 text-right tabular-nums text-orange-600">
+                              {formatPrice(item.precioMaximoRegulado) || "-"}
+                            </td>
+                          </tr>
+                        );
+                      });
+                    })()
                   ) : (
                     <tr>
                       <td colSpan={6} className="px-3 py-5 text-center text-slate-500">

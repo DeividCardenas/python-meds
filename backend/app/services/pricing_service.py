@@ -39,7 +39,7 @@ STANDARD_FIELDS = [
 # Heuristic patterns for auto-detecting which supplier column maps to which
 # standard field.  Each pattern is tried against the *lower-cased* column name.
 _AUTO_DETECT_PATTERNS: dict[str, list[str]] = {
-    "cum_code": [r"cum", r"codigo\s*cum", r"c[oó]digo.*cum", r"axapta"],  # "Código Axapta" is used by MEGALABS for CUM-like product codes
+    "cum_code": [r"\bcum\b", r"codigo\s*cum", r"c[oó]digo.*cum"],  # "Código Axapta" is an ERP-internal code (NOT a CUM) – intentionally excluded
     # precio_unidad matches explicit unit/UMD price columns (Megalabs "Precio UMD", La Sante "PRECIO UNIDAD MINIMA")
     "precio_unidad": [r"precio\s*umd", r"precio.*unidad\s*m[ií]nima"],
     # precio_presentacion matches box/presentation price columns
@@ -48,10 +48,20 @@ _AUTO_DETECT_PATTERNS: dict[str, list[str]] = {
     "porcentaje_iva": [r"iva", r"impuesto.*valor.*agregado", r"tax"],
     # precio_unitario is the generic fallback for any remaining price column
     "precio_unitario": [r"precio.*unit", r"unit.*price", r"precio"],
-    "descripcion": [r"descripci[oó]n", r"producto", r"nombre", r"description"],
+    "descripcion": [r"descripci[oó]n", r"principio\s*activo", r"principio", r"producto", r"\bnombre(?!\s*comercial)\b", r"description"],
     "vigente_desde": [r"vigente?\s*desde", r"valid\s*from", r"fecha\s*inicio"],
     "vigente_hasta": [r"vigente?\s*hasta", r"valid\s*to", r"fecha\s*fin", r"fecha\s*vencimiento"],
 }
+
+
+# Matches a dose/concentration token in a text string.
+# Used to detect whether the mapped description column already contains a
+# numeric concentration (e.g. "875 mg", "0,5 ml", "10 %") and, if not, to
+# extract one from a secondary column such as "Nombre comercial".
+_DOSE_IN_DESCRIPTION = re.compile(
+    r"\d+[.,]?\d*\s*(?:mg|mcg|ug|ml|g\b|ui\b|iu\b|%)",
+    re.IGNORECASE,
+)
 
 
 def _read_dataframe(file_path: str) -> pl.DataFrame:
@@ -300,6 +310,22 @@ async def procesar_archivo_proveedor(
                 descripcion = str(row[desc_col]).strip() or None
             else:
                 descripcion = None
+
+            # Description enrichment: when the description column lacks a
+            # numeric dose (e.g. Megalabs "Principio activo" = "Duloxetina"),
+            # try to extract a concentration token from any "Nombre comercial"
+            # column present in the raw row (e.g. "ALACIR 30 MG X 30" → "30 mg").
+            if descripcion and not _DOSE_IN_DESCRIPTION.search(descripcion):
+                comercial_col = next(
+                    (c for c in row if re.search(r"nombre\s*comercial|comercial", c, re.IGNORECASE)),
+                    None,
+                )
+                if comercial_col and row.get(comercial_col):
+                    dose_tokens = _DOSE_IN_DESCRIPTION.findall(str(row[comercial_col]))
+                    if dose_tokens:
+                        # Normalise to lowercase so the appended tokens are
+                        # consistent with the already-normalised base description.
+                        descripcion = f"{descripcion} {' '.join(t.lower() for t in dose_tokens)}"
 
             # Pillar 3 – Missing Data Protocol
             # When validity date columns are not mapped OR the values are

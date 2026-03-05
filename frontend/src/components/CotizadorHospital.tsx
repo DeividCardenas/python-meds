@@ -33,9 +33,21 @@ const fmtDate = (s?: string | null) => {
   return isNaN(d.getTime()) ? s : d.toLocaleDateString("es-CO");
 };
 
-/** Pick the provider with the lowest precioUnitario */
-const getBestPrecio = (precios?: PrecioItemFragment[] | null): PrecioItemFragment | null => {
+/** Pick the lowest price that complies with the regulated max (if regulated).
+ *  Falls back to overall cheapest if no compliant option exists. */
+const getBestPrecio = (
+  precios?: PrecioItemFragment[] | null,
+  esRegulado?: boolean,
+  precioMaximoRegulado?: number | null,
+): PrecioItemFragment | null => {
   if (!precios?.length) return null;
+  if (esRegulado && precioMaximoRegulado != null) {
+    const compliant = precios.filter((p) => (p.precioUnitario ?? Infinity) <= precioMaximoRegulado);
+    const pool = compliant.length > 0 ? compliant : precios;
+    return pool.reduce((best, p) =>
+      (p.precioUnitario ?? Infinity) < (best.precioUnitario ?? Infinity) ? p : best,
+    );
+  }
   return precios.reduce((best, p) =>
     (p.precioUnitario ?? Infinity) < (best.precioUnitario ?? Infinity) ? p : best,
   );
@@ -158,7 +170,17 @@ function KpiBar({ r }: { r: ResumenCotizacionFragment }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // ProviderDrawer — progressive disclosure: all providers sorted asc + deviation
 // ─────────────────────────────────────────────────────────────────────────────
-function ProviderDrawer({ precios, bestPrice }: { precios: PrecioItemFragment[]; bestPrice: number | null }) {
+function ProviderDrawer({
+  precios,
+  bestPrice,
+  esRegulado,
+  precioMaximoRegulado,
+}: {
+  precios: PrecioItemFragment[];
+  bestPrice: number | null;
+  esRegulado: boolean;
+  precioMaximoRegulado: number | null | undefined;
+}) {
   const sorted = useMemo(
     () => [...precios].sort((a, b) => (a.precioUnitario ?? Infinity) - (b.precioUnitario ?? Infinity)),
     [precios],
@@ -166,8 +188,18 @@ function ProviderDrawer({ precios, bestPrice }: { precios: PrecioItemFragment[];
 
   return (
     <tr>
-      <td colSpan={8} className="p-0">
+      <td colSpan={9} className="p-0">
         <div className="mx-4 mb-3 mt-0.5 overflow-hidden rounded-lg border border-slate-100">
+          {esRegulado && precioMaximoRegulado != null && (
+            <div className="flex items-center gap-2 border-b border-orange-100 bg-orange-50 px-3 py-1.5">
+              <span className="text-[11px] font-semibold text-orange-700">
+                🔒 Tope regulado: {fmtCOP(precioMaximoRegulado)}
+              </span>
+              <span className="text-[10px] text-orange-500">
+                — Los precios marcados con ⚠ superan el máximo legal
+              </span>
+            </div>
+          )}
           <table className="w-full text-left">
             <thead>
               <tr className="border-b border-slate-100 bg-slate-50">
@@ -186,6 +218,11 @@ function ProviderDrawer({ precios, bestPrice }: { precios: PrecioItemFragment[];
             <tbody className="divide-y divide-slate-50">
               {sorted.map((p: PrecioItemFragment, i: number) => {
                 const isBest = bestPrice != null && p.precioUnitario === bestPrice;
+                const excedeRegulado =
+                  esRegulado &&
+                  precioMaximoRegulado != null &&
+                  p.precioUnitario != null &&
+                  p.precioUnitario > precioMaximoRegulado;
                 const dev =
                   bestPrice != null && p.precioUnitario != null && !isBest
                     ? deviationPct(p.precioUnitario, bestPrice)
@@ -197,7 +234,16 @@ function ProviderDrawer({ precios, bestPrice }: { precios: PrecioItemFragment[];
                   :              "text-red-500 font-medium";
 
                 return (
-                  <tr key={i} className={isBest ? "bg-emerald-50/70" : "bg-white"}>
+                  <tr
+                    key={i}
+                    className={
+                      excedeRegulado
+                        ? "bg-red-50/60"
+                        : isBest
+                          ? "bg-emerald-50/70"
+                          : "bg-white"
+                    }
+                  >
                     <td className="px-3 py-1.5 text-xs text-slate-700">
                       <span className="flex items-center gap-2">
                         {isBest && (
@@ -205,10 +251,19 @@ function ProviderDrawer({ precios, bestPrice }: { precios: PrecioItemFragment[];
                             ★ Mejor
                           </span>
                         )}
+                        {excedeRegulado && (
+                          <span className="inline-flex items-center rounded bg-red-100 px-1 py-0.5 text-[9px] font-bold uppercase tracking-wider text-red-600">
+                            ⚠ Excede
+                          </span>
+                        )}
                         {p.proveedorNombre ?? "—"}
                       </span>
                     </td>
-                    <td className={`px-3 py-1.5 text-right text-xs font-medium tabular-nums ${isBest ? "text-emerald-700" : "text-slate-700"}`}>
+                    <td
+                      className={`px-3 py-1.5 text-right text-xs font-medium tabular-nums ${
+                        excedeRegulado ? "text-red-600" : isBest ? "text-emerald-700" : "text-slate-700"
+                      }`}
+                    >
                       {fmtCOP(p.precioUnitario)}
                     </td>
                     <td className={`px-3 py-1.5 text-right text-xs tabular-nums ${devColor}`}>
@@ -245,8 +300,15 @@ function FilaResultado({ fila }: { fila: CotizacionFilaFragment }) {
   const tienePrecios = precios.length > 0;
   const hasMatch = fila.matchStage && fila.matchStage !== "NO_MATCH";
 
-  const bestPrecio = getBestPrecio(precios);
+  const bestPrecio = getBestPrecio(precios, fila.esRegulado, fila.precioMaximoRegulado);
   const bestPrice = bestPrecio?.precioUnitario ?? null;
+
+  // Bandera: el mejor precio disponible excede el tope regulado
+  const excedeTopeRegulado =
+    fila.esRegulado &&
+    fila.precioMaximoRegulado != null &&
+    bestPrice != null &&
+    bestPrice > fila.precioMaximoRegulado;
 
   return (
     <>
@@ -353,6 +415,11 @@ function FilaResultado({ fila }: { fila: CotizacionFilaFragment }) {
                   Máx {fmtCOP(fila.precioMaximoRegulado)}
                 </span>
               )}
+              {excedeTopeRegulado && (
+                <span className="text-[10px] font-semibold text-red-500">
+                  ⚠ Todos exceden tope
+                </span>
+              )}
             </span>
           ) : (
             <span className="text-xs text-slate-200">—</span>
@@ -361,7 +428,14 @@ function FilaResultado({ fila }: { fila: CotizacionFilaFragment }) {
       </tr>
 
       {/* Progressive disclosure: provider comparison drawer */}
-      {expanded && tienePrecios && <ProviderDrawer precios={precios} bestPrice={bestPrice} />}
+      {expanded && tienePrecios && (
+        <ProviderDrawer
+          precios={precios}
+          bestPrice={bestPrice}
+          esRegulado={fila.esRegulado ?? false}
+          precioMaximoRegulado={fila.precioMaximoRegulado}
+        />
+      )}
     </>
   );
 }
@@ -376,7 +450,7 @@ export function CotizadorHospital() {
   const [dragOver, setDragOver] = useState(false);
   const [filename, setFilename] = useState<string | null>(null);
   const [filterText, setFilterText] = useState("");
-  const [filterMatch, setFilterMatch] = useState<"all" | "match" | "nomatch" | "noprecio">("all");
+  const [filterMatch, setFilterMatch] = useState<"all" | "match" | "nomatch" | "noprecio" | "regulados">("all");
   const [sortKey, setSortKey] = useState<SortKey | null>(null);
   const [sortDir, setSortDir] = useState<SortDir>("asc");
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -456,6 +530,7 @@ export function CotizadorHospital() {
       if (filterMatch === "match" && (!f.matchStage || f.matchStage === "NO_MATCH")) return false;
       if (filterMatch === "nomatch" && f.matchStage && f.matchStage !== "NO_MATCH") return false;
       if (filterMatch === "noprecio" && (f.preciosCount ?? 0) > 0) return false;
+      if (filterMatch === "regulados" && !f.esRegulado) return false;
       return true;
     });
     if (sortKey) {
@@ -664,10 +739,11 @@ export function CotizadorHospital() {
         {/* Segment filter tabs */}
         <div className="flex divide-x divide-slate-200 overflow-hidden rounded-lg border border-slate-200 text-xs">
           {([
-            { key: "all",      label: "Todos"      },
-            { key: "match",    label: "Con match"  },
-            { key: "nomatch",  label: "Sin match"  },
-            { key: "noprecio", label: "Sin precio" },
+            { key: "all",       label: "Todos"      },
+            { key: "match",     label: "Con match"  },
+            { key: "nomatch",   label: "Sin match"  },
+            { key: "noprecio",  label: "Sin precio" },
+            { key: "regulados", label: "🔒 Regulados" },
           ] as const).map(({ key, label }) => (
             <button key={key} type="button" onClick={() => setFilterMatch(key)}
               className={`px-3 py-1.5 transition-colors ${

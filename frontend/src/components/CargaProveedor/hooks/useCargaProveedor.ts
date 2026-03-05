@@ -135,14 +135,16 @@ export function useCargaProveedor(): UseCargaProveedorReturn {
       await confirmarMapeo({
         variables: {
           archivoId,
-          cumCode: mapeo.cum_code ?? null,
-          precioUnitario: mapeo.precio_unitario ?? null,
-          precioUnidad: mapeo.precio_unidad ?? null,
-          precioPresentacion: mapeo.precio_presentacion ?? null,
-          porcentajeIva: mapeo.porcentaje_iva ?? null,
-          descripcion: mapeo.descripcion ?? null,
-          vigentDesde: mapeo.vigente_desde ?? null,
-          vigenteHasta: mapeo.vigente_hasta ?? null,
+          mapeo: {
+            cumCode: mapeo.cum_code ?? null,
+            precioUnitario: mapeo.precio_unitario ?? null,
+            precioUnidad: mapeo.precio_unidad ?? null,
+            precioPresentacion: mapeo.precio_presentacion ?? null,
+            porcentajeIva: mapeo.porcentaje_iva ?? null,
+            descripcion: mapeo.descripcion ?? null,
+            vigenteDesde: mapeo.vigente_desde ?? null,
+            vigenteHasta: mapeo.vigente_hasta ?? null,
+          },
         },
       });
       setStep("processing");

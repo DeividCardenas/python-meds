@@ -49,5 +49,10 @@ def _process_errors(errors: List[GraphQLError], execution_context=None) -> List[
     return sanitized
 
 
-schema = strawberry.Schema(query=Query, mutation=Mutation, process_errors=_process_errors)
+class _Schema(strawberry.Schema):
+    def process_errors(self, errors: List[GraphQLError], execution_context=None) -> List[GraphQLError]:
+        return _process_errors(errors, execution_context)
+
+
+schema = _Schema(query=Query, mutation=Mutation)
 

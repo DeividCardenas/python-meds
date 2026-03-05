@@ -40,7 +40,9 @@ SOCRATA_APP_TOKEN: str = os.getenv("SOCRATA_APP_TOKEN", "")
 SISMED_ENDPOINT = "https://www.datos.gov.co/resource/3he6-m866.json"
 
 # Tamaño del lote para paginación SoQL
-SISMED_BATCH_SIZE: int = int(os.getenv("SISMED_BATCH_SIZE", "5000"))
+# 1 000 filas evita timeouts de lectura en la API de datos.gov.co (gobierno CO),
+# cuyo p99 de respuesta supera 180 s con lotes de 5 000 registros.
+SISMED_BATCH_SIZE: int = int(os.getenv("SISMED_BATCH_SIZE", "1000"))
 
 # Máximo de filas por sentencia UPSERT.
 # Numeric(14,4) tiene 3 columnas numéricas + 2 string + id + audit = ~12 campos
@@ -432,8 +434,20 @@ async def _fetch_sismed(
                     )
                     raise
             except aiohttp.ClientError as exc:
-                logger.error("Error de conexión SISMED (offset=%s): %s", offset, exc)
-                raise
+                # Incluye ServerTimeoutError / SocketTimeoutError — reintenta con backoff
+                if attempt < _HTTP_RETRIES:
+                    wait = _HTTP_RETRY_BACKOFF * (2 ** (attempt - 1))
+                    logger.warning(
+                        "SISMED conexión/timeout en offset=%s, intento %s/%s. Reintentando en %.1fs…",
+                        offset,
+                        attempt,
+                        _HTTP_RETRIES,
+                        wait,
+                    )
+                    await asyncio.sleep(wait)
+                else:
+                    logger.error("Error de conexión SISMED (offset=%s): %s", offset, exc)
+                    raise
 
         if batch_raw is None:
             break

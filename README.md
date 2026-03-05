@@ -51,7 +51,7 @@ Ejecutar la mutation en `http://localhost:8000/graphql`:
 ```graphql
 mutation {
   sincronizarCatalogos(incluirSismed: false) {
-    cum { tareaId mensaje }
+    cum { tarea mensaje }
   }
 }
 ```
@@ -81,15 +81,15 @@ Requiere que el Paso 1 esté completo (FK a `medicamentos_cum`).
 ```graphql
 mutation {
   sincronizarCatalogos(incluirSismed: true) {
-    cum   { tareaId mensaje }
-    sismed { tareaId mensaje }
+    cum   { tarea mensaje }
+    sismed { tarea mensaje }
   }
 }
 ```
 
 ```bash
-docker compose logs worker --follow
-# Esperar: "Sincronización SISMED completada"
+docker exec python-meds-worker-1 celery -A app.worker.tasks.celery_app call task_sincronizar_precios_sismed
+#Sincronizar mediante comando
 ```
 
 Verificar:

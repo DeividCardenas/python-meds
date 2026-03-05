@@ -29,12 +29,56 @@ query ComparativaPrecios($principioActivo: String!) {
     precioEmpaque
     esRegulado
     precioMaximoRegulado
+    mejorPrecioProveedor
+    mejorProveedorNombre
   }
 }
 
 # ---------------------------------------------------------------------------
 # Bulk hospital quotation
 # ---------------------------------------------------------------------------
+
+fragment PrecioItem on PrecioItemNode {
+  proveedorNombre
+  precioUnitario
+  precioUnidad
+  precioPresentacion
+  porcentajeIva
+  vigenteDesde
+  vigenteHasta
+  fechaPublicacion
+}
+
+fragment ResumenCotizacion on ResumenCotizacionNode {
+  total
+  conMatch
+  sinMatch
+  conPrecio
+  sinPrecio
+  tasaMatch
+  tasaPrecio
+}
+
+fragment CotizacionFila on CotizacionFilaNode {
+  nombreInput
+  matchStage
+  matchConfidence
+  cumId
+  nombreMatcheado
+  formaFarmaceutica
+  concentracion
+  rejectReason
+  innScore
+  preciosCount
+  esRegulado
+  precioMaximoRegulado
+  mejorPrecio {
+    ...PrecioItem
+  }
+  todosPrecios {
+    ...PrecioItem
+  }
+}
 
 mutation IniciarCotizacion($file: Upload!, $hospitalId: String) {
   iniciarCotizacion(file: $file, hospitalId: $hospitalId) {
@@ -55,47 +99,78 @@ query GetCotizacion($id: ID!) {
     fechaCreacion
     fechaCompletado
     resumen {
-      total
-      conMatch
-      sinMatch
-      conPrecio
-      sinPrecio
-      tasaMatch
-      tasaPrecio
+      ...ResumenCotizacion
     }
     filas {
-      nombreInput
-      matchStage
-      matchConfidence
-      cumId
-      nombreMatcheado
-      formaFarmaceutica
-      concentracion
-      rejectReason
-      innScore
-      preciosCount
-      esRegulado
-      precioMaximoRegulado
-      mejorPrecio {
-        proveedorNombre
-        precioUnitario
-        precioUnidad
-        precioPresentacion
-        porcentajeIva
-        vigenteDesde
-        vigenteHasta
-        fechaPublicacion
-      }
-      todosPrecios {
-        proveedorNombre
-        precioUnitario
-        precioUnidad
-        precioPresentacion
-        porcentajeIva
-        vigenteDesde
-        vigenteHasta
-        fechaPublicacion
-      }
+      ...CotizacionFila
     }
+  }
+}
+
+# ---------------------------------------------------------------------------
+# Supplier price upload (CargaProveedor flow)
+# ---------------------------------------------------------------------------
+
+mutation SubirArchivoProveedor($file: Upload!) {
+  subirArchivoProveedor(file: $file) {
+    id
+    filename
+    status
+    columnasDetectadas
+    mapeoSugerido
+  }
+}
+
+mutation ConfirmarMapeoProveedor($archivoId: ID!, $mapeo: MapeoColumnasInput!) {
+  confirmarMapeoProveedor(archivoId: $archivoId, mapeo: $mapeo) {
+    id
+    filename
+    status
+    columnasDetectadas
+    mapeoSugerido
+  }
+}
+
+mutation AprobarStagingFila($stagingId: ID!, $idCum: String!) {
+  aprobarStagingFila(stagingId: $stagingId, idCum: $idCum) {
+    id
+    filaNumero
+    cumCode
+    precioUnitario
+    precioUnidad
+    precioPresentacion
+    porcentajeIva
+    descripcionRaw
+    estadoHomologacion
+    sugerenciasCum
+    datosRaw
+    fechaVigenciaIndefinida
+    confianzaScore
+  }
+}
+
+mutation PublicarPreciosProveedor($archivoId: ID!) {
+  publicarPreciosProveedor(archivoId: $archivoId) {
+    filasPublicadas
+    archivoId
+    status
+  }
+}
+
+query GetStagingFilas($archivoId: ID!) {
+  getStagingFilas(archivoId: $archivoId) {
+    id
+    filaNumero
+    cumCode
+    precioUnitario
+    precioUnidad
+    precioPresentacion
+    porcentajeIva
+    descripcionRaw
+    estadoHomologacion
+    sugerenciasCum
+    datosRaw
+    fechaVigenciaIndefinida
+    confianzaScore
   }
 }

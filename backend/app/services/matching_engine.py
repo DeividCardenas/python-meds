@@ -375,10 +375,11 @@ async def _stage1_exact(
         if passes:
             return row
 
-    if not canonical_form:
-        return None
-
-    # ── Pass B: word-similarity on PA + LIKE on forma ───────────────────────
+    # ── Pass B: word-similarity on PA + optional LIKE on forma ─────────────
+    # When canonical_form is empty (packaging noise prevented form extraction),
+    # we skip the form filter and rely solely on word_similarity + the Python
+    # concentration hard barrier.  A match without form verification is still
+    # valuable for pricing purposes and is clearly flagged by match_stage=EXACT.
     # Set the word_similarity threshold so PostgreSQL uses the GIN index
     # ix_medicamentos_principio_activo_gin with the <% operator.
     await session.execute(
@@ -386,6 +387,17 @@ async def _stage1_exact(
         {"threshold": WORD_SIM_INN_THRESHOLD},
     )
     pa_lower_b = func.lower(func.coalesce(Medicamento.principio_activo, ""))
+    stmt_b_filters = [
+        literal(inn_query).op("<%")(pa_lower_b),
+        Medicamento.activo == True,  # noqa: E712
+    ]
+    # Only add the form LIKE filter when we actually have a canonical form.
+    if canonical_form:
+        stmt_b_filters.append(
+            func.lower(func.coalesce(Medicamento.forma_farmaceutica, "")).contains(
+                canonical_form
+            )
+        )
     stmt_b = (
         select(
             Medicamento.id,
@@ -396,17 +408,7 @@ async def _stage1_exact(
             MedicamentoCUM.concentracion,
         )
         .outerjoin(MedicamentoCUM, Medicamento.id_cum == MedicamentoCUM.id_cum)
-        .where(
-            # <% is the word_similarity operator; GIN ix_medicamentos_principio_activo_gin
-            # is used when pg_trgm.word_similarity_threshold is set (SET above).
-            literal(inn_query).op("<%")(pa_lower_b)
-        )
-        .where(
-            func.lower(func.coalesce(Medicamento.forma_farmaceutica, "")).contains(
-                canonical_form
-            )
-        )
-        .where(Medicamento.activo == True)  # noqa: E712
+        .where(*stmt_b_filters)
         .order_by(
             func.word_similarity(
                 inn_query,
