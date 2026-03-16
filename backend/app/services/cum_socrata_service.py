@@ -92,16 +92,6 @@ def _parse_int(value: Any) -> int | None:
         return None
 
 
-def _parse_float(value: Any) -> float | None:
-    """Convierte un valor a float; retorna None si no es posible."""
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
 def _parse_datetime(value: Any) -> datetime | None:
     """Convierte una cadena ISO 8601 a datetime con zona horaria UTC; retorna None si falla."""
     if not value:
@@ -139,7 +129,7 @@ def _map_record(raw: dict[str, Any]) -> dict[str, Any]:
         "fechaexpedicion": _parse_datetime(raw.get("fechaexpedicion")),
         "fechavencimiento": _parse_datetime(raw.get("fechavencimiento")),
         "estadoregistro": raw.get("estadoregistro"),
-        "cantidadcum": _parse_float(raw.get("cantidadcum")),
+        "cantidadcum": _parse_int(raw.get("cantidadcum")),
         "descripcioncomercial": raw.get("descripcioncomercial"),
         "estadocum": raw.get("estadocum"),
         "fechaactivo": _parse_datetime(raw.get("fechaactivo")),
@@ -159,86 +149,6 @@ def _map_record(raw: dict[str, Any]) -> dict[str, Any]:
         "tiporol": raw.get("tiporol"),
         "modalidad": raw.get("modalidad"),
     }
-
-
-# ---------------------------------------------------------------------------
-# Smart Deduplication – resolver duplicados de id_cum dentro de un lote
-# ---------------------------------------------------------------------------
-
-# Estados considerados "activos/vigentes" (mayor prioridad)
-_ACTIVE_STATES: frozenset[str] = frozenset({"vigente", "activo"})
-
-
-def _status_priority(row: dict[str, Any]) -> int:
-    """Retorna 0 para estados activos/vigentes, 1 para cualquier otro estado.
-
-    Un valor menor indica mayor prioridad en la deduplicación.
-    """
-    estado = (row.get("estadocum") or "").lower().strip()
-    return 0 if estado in _ACTIVE_STATES else 1
-
-
-def _deduplicate_chunk(chunk: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Elimina duplicados de id_cum dentro de un lote usando reglas de negocio.
-
-    Prioridades (en orden):
-    1. Estado: 'vigente'/'activo' gana sobre 'vencido'/'inactivo'/'en tramite'.
-    2. Fecha de vencimiento: la más reciente gana.  Se maneja de forma segura
-       cualquier combinación de datetimes con/sin zona horaria.
-    3. Desempate: se conserva la última fila procesada (mayor índice en el lote).
-
-    Returns:
-        Lista sin duplicados, con un único registro por id_cum.
-    """
-    best: dict[str, dict[str, Any]] = {}
-
-    for row in chunk:
-        key = row.get("id_cum")
-        if key is None:
-            continue
-
-        if key not in best:
-            best[key] = row
-            continue
-
-        current = best[key]
-
-        # --- Regla 1: prioridad por estado ---
-        current_priority = _status_priority(current)
-        new_priority = _status_priority(row)
-
-        if new_priority < current_priority:
-            best[key] = row
-            continue
-        if new_priority > current_priority:
-            # El registro actual ya es mejor; conservarlo
-            continue
-
-        # --- Regla 2: prioridad por fecha de vencimiento más reciente ---
-        current_date: datetime | None = current.get("fechavencimiento")
-        new_date: datetime | None = row.get("fechavencimiento")
-
-        if new_date is not None:
-            if current_date is None:
-                best[key] = row
-                continue
-            # _parse_datetime siempre asigna UTC; normalizar fechas naive como
-            # UTC para garantizar comparaciones seguras entre ambos tipos.
-            current_ts = current_date.replace(tzinfo=timezone.utc) if current_date.tzinfo is None else current_date
-            new_ts = new_date.replace(tzinfo=timezone.utc) if new_date.tzinfo is None else new_date
-            if new_ts > current_ts:
-                best[key] = row
-                continue
-            if new_ts < current_ts:
-                # El registro actual tiene fecha más reciente; conservarlo
-                continue
-            # new_ts == current_ts → desempate por regla 3
-
-        # --- Regla 3: desempate – conservar la última fila procesada ---
-        best[key] = row
-
-    return list(best.values())
-
 
 # ---------------------------------------------------------------------------
 # Construcción del UPSERT
@@ -391,10 +301,6 @@ async def _fetch_endpoint(
         # Mapear y filtrar registros inválidos (sin expediente/consecutivocum)
         rows = [mapped for raw in batch_raw if (mapped := _map_record(raw))]
 
-        # Deduplicar dentro del lote antes del upsert para evitar
-        # CardinalityViolationError por id_cum duplicados en el mismo chunk
-        rows = _deduplicate_chunk(rows)
-
         if rows:
             # Sub-batching para no superar el límite de 32 767 parámetros de PostgreSQL
             for i in range(0, len(rows), _UPSERT_CHUNK_SIZE):
@@ -498,49 +404,7 @@ async def sincronizar_catalogos_cum(
         logger.error("Error poblando medicamentos desde CUM: %s", exc)
         resultados["_poblar_medicamentos"] = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
 
-    # Propagar estado_cum y activo a la tabla medicamentos tras la sincronización
-    try:
-        sync_result = await sincronizar_estado_medicamentos(session_factory)
-        resultados["_estado_sync"] = {"status": "ok", **sync_result}
-    except Exception as exc:  # noqa: BLE001
-        logger.error("Error propagando estado CUM a medicamentos: %s", exc)
-        resultados["_estado_sync"] = {"status": "error", "error": f"{type(exc).__name__}: {exc}"}
-
     return resultados
-
-
-async def sincronizar_estado_medicamentos(
-    session_factory: async_sessionmaker[AsyncSession],
-) -> dict[str, Any]:
-    """
-    Propaga el estado del catálogo CUM a la tabla medicamentos.
-
-    Para cada medicamento que tenga un id_cum vinculado, actualiza:
-    - estado_cum   → valor raw de medicamentos_cum.estadocum
-    - activo       → True si estadocum es 'vigente' o 'activo' (case-insensitive)
-
-    Los medicamentos sin id_cum conservan activo=true (valor por defecto).
-    Se llama automáticamente al final de sincronizar_catalogos_cum.
-    """
-    async with session_factory() as session:
-        result = await session.execute(
-            sa_text("""
-            UPDATE medicamentos m
-            SET
-                estado_cum = c.estadocum,
-                activo     = lower(c.estadocum) IN ('vigente', 'activo')
-            FROM medicamentos_cum c
-            WHERE m.id_cum = c.id_cum
-              AND m.id_cum IS NOT NULL
-            """)
-        )
-        await session.commit()
-        filas_actualizadas = result.rowcount
-    logger.info(
-        "Estado CUM propagado a medicamentos: %s filas actualizadas.",
-        filas_actualizadas,
-    )
-    return {"filas_actualizadas": filas_actualizadas}
 
 
 async def poblar_medicamentos_desde_cum(
@@ -558,8 +422,8 @@ async def poblar_medicamentos_desde_cum(
     - ``nombre_limpio`` se construye concatenando nombre comercial + principio
       activo y normalizando a minúsculas sin símbolos de marca.
 
-    Se llama automáticamente al inicio de la fase de post-proceso en
-    ``sincronizar_catalogos_cum``, antes de ``sincronizar_estado_medicamentos``.
+    Se llama automáticamente en la fase de post-proceso de
+    ``sincronizar_catalogos_cum``.
     """
     async with session_factory() as session:
         result = await session.execute(

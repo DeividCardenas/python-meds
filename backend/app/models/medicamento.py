@@ -6,7 +6,22 @@ from typing import Any
 from uuid import UUID, uuid4
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import JSON, Boolean, Column, Computed, DateTime, Float, ForeignKey, Index, Integer, Numeric, String, UniqueConstraint, text
+from sqlalchemy import (
+    JSON,
+    Boolean,
+    CheckConstraint,
+    Column,
+    Computed,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    UniqueConstraint,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import TSVECTOR, UUID as PGUUID
 from sqlmodel import Field, SQLModel
 
@@ -26,7 +41,31 @@ class Medicamento(SQLModel, table=True):
         default_factory=uuid4,
         sa_column=Column(PGUUID(as_uuid=True), primary_key=True),
     )
-    id_cum: str | None = Field(default=None, sa_column=Column(String, nullable=True, unique=True, index=True))
+    created_at: datetime = Field(
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+        )
+    )
+    updated_at: datetime = Field(
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+            onupdate=func.now(),
+        )
+    )
+    id_cum: str | None = Field(
+        default=None,
+        sa_column=Column(
+            String,
+            ForeignKey("medicamentos_cum.id_cum"),
+            nullable=True,
+            unique=True,
+            index=True,
+        ),
+    )
     nombre_limpio: str = Field(sa_column=Column(String, nullable=False, index=True))
     atc: str | None = Field(default=None, sa_column=Column(String, nullable=True))
     registro_invima: str | None = Field(default=None, sa_column=Column(String, nullable=True))
@@ -64,10 +103,31 @@ class PrecioReferencia(SQLModel, table=True):
         default_factory=uuid4,
         sa_column=Column(PGUUID(as_uuid=True), primary_key=True),
     )
+    created_at: datetime = Field(
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+        )
+    )
+    updated_at: datetime = Field(
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+            onupdate=func.now(),
+        )
+    )
     medicamento_id: UUID = Field(
-        sa_column=Column(PGUUID(as_uuid=True), ForeignKey("medicamentos.id"), nullable=False, index=True)
+        sa_column=Column(
+            PGUUID(as_uuid=True),
+            ForeignKey("medicamentos.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        )
     )
     empresa: str = Field(sa_column=Column(String, nullable=False))
+    activo: bool = Field(default=True, sa_column=Column(Boolean, nullable=False, server_default="true", index=True))
     precio: Decimal | None = Field(default=None, sa_column=Column(Numeric(12, 2), nullable=True))
     fu: Decimal | None = Field(default=None, sa_column=Column(Numeric(18, 8), nullable=True))
     vpc: Decimal | None = Field(default=None, sa_column=Column(Numeric(18, 8), nullable=True))
@@ -95,9 +155,38 @@ class MedicamentoCUM(SQLModel, table=True):
     """
 
     __tablename__ = "medicamentos_cum"
+    __table_args__ = (
+        Index("ix_medicamentos_cum_registrosanitario", "registrosanitario"),
+        Index("ix_medicamentos_cum_expediente", "expediente"),
+        Index(
+            "ix_medicamentos_cum_principioactivo_gin",
+            text("lower(coalesce(principioactivo, '')) gin_trgm_ops"),
+            postgresql_using="gin",
+        ),
+        Index(
+            "ix_medicamentos_cum_descripcioncomercial_gin",
+            text("lower(coalesce(descripcioncomercial, '')) gin_trgm_ops"),
+            postgresql_using="gin",
+        ),
+    )
 
     # PK: concatenación de expediente + "-" + consecutivocum
     id_cum: str = Field(sa_column=Column(String, primary_key=True))
+    created_at: datetime = Field(
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+        )
+    )
+    updated_at: datetime = Field(
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+            onupdate=func.now(),
+        )
+    )
 
     # Campos atómicos provenientes de la API Socrata
     expediente: int | None = Field(default=None, sa_column=Column(Integer, nullable=True))
@@ -108,7 +197,7 @@ class MedicamentoCUM(SQLModel, table=True):
     fechaexpedicion: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
     fechavencimiento: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
     estadoregistro: str | None = Field(default=None, sa_column=Column(String, nullable=True))
-    cantidadcum: float | None = Field(default=None, sa_column=Column(Float, nullable=True))
+    cantidadcum: int | None = Field(default=None, sa_column=Column(Integer, nullable=True))
     descripcioncomercial: str | None = Field(default=None, sa_column=Column(String, nullable=True))
     estadocum: str | None = Field(default=None, sa_column=Column(String, nullable=True, index=True))
     fechaactivo: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
@@ -160,9 +249,9 @@ class PrecioMedicamento(SQLModel, table=True):
     que refleja que un mismo CUM puede tener precios distintos en el canal
     institucional ('INS') y en el canal comercial ('COM').
 
-    El campo id_cum es una Foreign Key explícita que apunta a
-    medicamentos_cum.id_cum, garantizando integridad referencial con el
-    catálogo INVIMA.
+    El campo id_cum es una llave lógica hacia medicamentos_cum.id_cum
+    (sin FK a nivel de BD para permitir precios SISMED de CUMs históricos
+    o no incluidos aún en el catálogo activo de INVIMA).
 
     Fuentes de datos
     ----------------
@@ -174,6 +263,8 @@ class PrecioMedicamento(SQLModel, table=True):
     __table_args__ = (
         UniqueConstraint("id_cum", "canal_mercado", name="uq_precio_cum_canal"),
         Index("ix_precios_medicamentos_id_cum", "id_cum"),
+        CheckConstraint("canal_mercado IN ('INS', 'COM')", name="ck_precios_medicamentos_canal_mercado"),
+        CheckConstraint("regimen_precios IN (1, 2, 3)", name="ck_precios_medicamentos_regimen_precios"),
     )
 
     # -----------------------------------------------------------------------
@@ -182,6 +273,21 @@ class PrecioMedicamento(SQLModel, table=True):
     id: UUID = Field(
         default_factory=uuid4,
         sa_column=Column(PGUUID(as_uuid=True), primary_key=True),
+    )
+    created_at: datetime = Field(
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+        )
+    )
+    updated_at: datetime = Field(
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+            onupdate=func.now(),
+        )
     )
 
     # Llave lógica hacia el catálogo INVIMA – mismo formato que MedicamentoCUM.id_cum
@@ -236,6 +342,8 @@ class PrecioMedicamento(SQLModel, table=True):
         sa_column=Column(Numeric(14, 4), nullable=True),
     )
 
+    activo: bool = Field(default=True, sa_column=Column(Boolean, nullable=False, server_default="true", index=True))
+
     # -----------------------------------------------------------------------
     # Auditoría
     # -----------------------------------------------------------------------
@@ -265,12 +373,29 @@ class PrecioReguladoCNPMDM(SQLModel, table=True):
     id_cum: str = Field(
         sa_column=Column(String, primary_key=True)
     )
+    created_at: datetime = Field(
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+        )
+    )
+    updated_at: datetime = Field(
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+            onupdate=func.now(),
+        )
+    )
 
     # Precio máximo de venta al público (PVP) expresado en pesos colombianos.
-    precio_maximo_venta: float | None = Field(
+    precio_maximo_venta: Decimal | None = Field(
         default=None,
-        sa_column=Column(Float, nullable=True),
+        sa_column=Column(Numeric(14, 4), nullable=True),
     )
+
+    activo: bool = Field(default=True, sa_column=Column(Boolean, nullable=False, server_default="true", index=True))
 
     # Identificador de la circular de origen, ej. "Circular 013 de 2022".
     circular_origen: str | None = Field(

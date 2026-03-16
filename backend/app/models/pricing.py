@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import Boolean, Column, Date, DateTime, ForeignKey, Integer, Numeric, String
+from sqlalchemy import Boolean, CheckConstraint, Column, Date, DateTime, ForeignKey, Index, Integer, Numeric, String, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlmodel import Field, SQLModel
@@ -22,6 +22,12 @@ class Proveedor(SQLModel, table=True):
         default_factory=uuid4,
         sa_column=Column(PGUUID(as_uuid=True), primary_key=True),
     )
+    created_at: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    )
+    updated_at: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    )
     nombre: str = Field(sa_column=Column(String, nullable=False))
     codigo: str = Field(sa_column=Column(String, nullable=False, unique=True, index=True))
 
@@ -36,6 +42,9 @@ class ProveedorAlias(SQLModel, table=True):
     """
 
     __tablename__ = "proveedor_aliases"
+    __table_args__ = (
+        CheckConstraint("tipo IN ('filename', 'header')", name="ck_proveedor_aliases_tipo"),
+    )
 
     id: UUID = Field(
         default_factory=uuid4,
@@ -44,7 +53,7 @@ class ProveedorAlias(SQLModel, table=True):
     proveedor_id: UUID = Field(
         sa_column=Column(
             PGUUID(as_uuid=True),
-            ForeignKey("proveedores.id"),
+            ForeignKey("proveedores.id", ondelete="CASCADE"),
             nullable=False,
             index=True,
         )
@@ -66,7 +75,12 @@ class ProveedorArchivo(SQLModel, table=True):
     )
     proveedor_id: UUID | None = Field(
         default=None,
-        sa_column=Column(PGUUID(as_uuid=True), ForeignKey("proveedores.id"), nullable=True, index=True),
+        sa_column=Column(
+            PGUUID(as_uuid=True),
+            ForeignKey("proveedores.id", ondelete="SET NULL"),
+            nullable=True,
+            index=True,
+        ),
     )
     filename: str = Field(sa_column=Column(String, nullable=False))
     status: CargaStatus = Field(
@@ -104,13 +118,30 @@ class StagingPrecioProveedor(SQLModel, table=True):
     """
 
     __tablename__ = "staging_precios_proveedor"
+    __table_args__ = (
+        CheckConstraint(
+            "estado_homologacion IN ('PENDIENTE', 'APROBADO', 'RECHAZADO')",
+            name="ck_staging_precios_proveedor_estado_homologacion",
+        ),
+    )
 
     id: UUID = Field(
         default_factory=uuid4,
         sa_column=Column(PGUUID(as_uuid=True), primary_key=True),
     )
+    created_at: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    )
+    updated_at: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
+    )
     archivo_id: UUID = Field(
-        sa_column=Column(PGUUID(as_uuid=True), ForeignKey("proveedor_archivos.id"), nullable=False, index=True),
+        sa_column=Column(
+            PGUUID(as_uuid=True),
+            ForeignKey("proveedor_archivos.id", ondelete="CASCADE"),
+            nullable=False,
+            index=True,
+        ),
     )
     fila_numero: int = Field(sa_column=Column(Integer, nullable=False))
 
@@ -213,10 +244,24 @@ class PrecioProveedor(SQLModel, table=True):
     """
 
     __tablename__ = "precios_proveedor"
+    __table_args__ = (
+        Index(
+            "ix_precios_proveedor_cum_code_proveedor_id_vigente_hasta",
+            "cum_code",
+            "proveedor_id",
+            "vigente_hasta",
+        ),
+    )
 
     id: UUID = Field(
         default_factory=uuid4,
         sa_column=Column(PGUUID(as_uuid=True), primary_key=True),
+    )
+    created_at: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    )
+    updated_at: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now())
     )
     # Traceability: FK back to the staging row that originated this record.
     # Soft reference — no DB-level FK so we can delete staging rows later.
@@ -225,18 +270,24 @@ class PrecioProveedor(SQLModel, table=True):
         sa_column=Column(PGUUID(as_uuid=True), nullable=False, index=True, unique=True),
     )
     # FK to the upload batch
-    archivo_id: UUID = Field(
+    archivo_id: UUID | None = Field(
+        default=None,
         sa_column=Column(
             PGUUID(as_uuid=True),
-            ForeignKey("proveedor_archivos.id"),
-            nullable=False,
+            ForeignKey("proveedor_archivos.id", ondelete="SET NULL"),
+            nullable=True,
             index=True,
         ),
     )
     # Soft reference to proveedores (nullable – batch may not have a known supplier)
     proveedor_id: UUID | None = Field(
         default=None,
-        sa_column=Column(PGUUID(as_uuid=True), ForeignKey("proveedores.id"), nullable=True, index=True),
+        sa_column=Column(
+            PGUUID(as_uuid=True),
+            ForeignKey("proveedores.id", ondelete="SET NULL"),
+            nullable=True,
+            index=True,
+        ),
     )
     # CUM code is mandatory in the production table
     cum_code: str = Field(sa_column=Column(String, nullable=False, index=True))
@@ -275,6 +326,7 @@ class PrecioProveedor(SQLModel, table=True):
         default=False,
         sa_column=Column(Boolean, nullable=False, server_default="false"),
     )
+    activo: bool = Field(default=True, sa_column=Column(Boolean, nullable=False, server_default="true", index=True))
     # --- Confidence score (inherited from staging) ---
     confianza_score: Decimal | None = Field(
         default=None,

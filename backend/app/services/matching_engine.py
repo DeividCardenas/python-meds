@@ -114,8 +114,10 @@ class DrugSynonymDictEntry(SQLModel, table=True):
     resolved_by:    str = Field(sa_column=Column(String, nullable=False, default="HUMAN"))
     confidence:   float = Field(sa_column=Column(Float, nullable=False, default=1.0))
     created_at: datetime = Field(
-        default_factory=datetime.utcnow,
-        sa_column=Column(DateTime(timezone=False), nullable=False),
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now()),
+    )
+    updated_at: datetime = Field(
+        sa_column=Column(DateTime(timezone=True), nullable=False, server_default=func.now(), onupdate=func.now()),
     )
 
 
