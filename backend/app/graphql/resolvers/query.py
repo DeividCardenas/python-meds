@@ -119,11 +119,19 @@ class Query:
         return [
             MedicamentoNode(
                 id=strawberry.ID(str(m.id)),
+                nombre_comercial=m.nombre_comercial,
+                marca_comercial=m.marca_comercial,
                 nombre_limpio=m.nombre_limpio,
+                dosis_cantidad=m.dosis_cantidad,
+                dosis_unidad=m.dosis_unidad,
                 distancia=0.0,
                 id_cum=m.id_cum,
                 laboratorio=m.laboratorio,
                 forma_farmaceutica=m.forma_farmaceutica,
+                via_administracion=m.via_administracion,
+                presentacion=m.presentacion,
+                tipo_liberacion=m.tipo_liberacion,
+                volumen_solucion=m.volumen_solucion,
                 registro_invima=m.registro_invima,
                 principio_activo=m.principio_activo,
                 precio_unitario=float(precios_map[m.id_cum].precio_sismed_minimo)

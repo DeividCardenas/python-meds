@@ -35,6 +35,9 @@ class Medicamento(SQLModel, table=True):
     __table_args__ = (
         Index("ix_medicamentos_nombre_gin", "nombre_limpio", postgresql_using="gin", postgresql_ops={"nombre_limpio": "gin_trgm_ops"}),
         Index("ix_medicamentos_principio_activo", text("lower(coalesce(principio_activo, ''))"), postgresql_using="btree"),
+        Index("ix_medicamentos_nombre_comercial", "nombre_comercial"),
+        Index("ix_medicamentos_dosis", "dosis_cantidad", "dosis_unidad"),
+        Index("ix_medicamentos_via", "via_administracion"),
     )
 
     id: UUID = Field(
@@ -73,6 +76,14 @@ class Medicamento(SQLModel, table=True):
     laboratorio: str | None = Field(default=None, sa_column=Column(String, nullable=True))
     principio_activo: str | None = Field(default=None, sa_column=Column(String, nullable=True))
     forma_farmaceutica: str | None = Field(default=None, sa_column=Column(String, nullable=True))
+    nombre_comercial: str | None = Field(default=None, sa_column=Column(String, nullable=True))
+    marca_comercial: str | None = Field(default=None, sa_column=Column(String, nullable=True))
+    dosis_cantidad: float | None = Field(default=None)
+    dosis_unidad: str | None = Field(default=None, sa_column=Column(String, nullable=True))
+    via_administracion: str | None = Field(default=None, sa_column=Column(String, nullable=True))
+    presentacion: str | None = Field(default=None, sa_column=Column(String, nullable=True))
+    tipo_liberacion: str | None = Field(default=None, sa_column=Column(String, nullable=True))
+    volumen_solucion: float | None = Field(default=None)
     embedding_status: str | None = Field(default=None, sa_column=Column(String, nullable=True))
     embedding: list[float] | None = Field(default=None, sa_column=Column(Vector(EMBEDDING_DIMENSION), nullable=True))
     # Estado del CUM: valor raw de medicamentos_cum.estadocum (ej. "Vigente", "Vencido")

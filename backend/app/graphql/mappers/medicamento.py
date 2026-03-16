@@ -5,8 +5,32 @@ from typing import Optional
 import strawberry
 
 from app.graphql.types.medicamento import MedicamentoNode
+from app.models.medicamento import Medicamento as DBMedicamento
 from app.repositories import medicamento_repo
 from app.services.search import buscar_medicamentos_hibrido
+
+
+def mapear_medicamento(db_med: DBMedicamento) -> MedicamentoNode:
+    return MedicamentoNode(
+        id=strawberry.ID(str(db_med.id)),
+        id_cum=db_med.id_cum,
+        nombre_comercial=db_med.nombre_comercial,
+        marca_comercial=db_med.marca_comercial,
+        nombre_limpio=db_med.nombre_limpio,
+        dosis_cantidad=db_med.dosis_cantidad,
+        dosis_unidad=db_med.dosis_unidad,
+        forma_farmaceutica=db_med.forma_farmaceutica,
+        via_administracion=db_med.via_administracion,
+        presentacion=db_med.presentacion,
+        tipo_liberacion=db_med.tipo_liberacion,
+        volumen_solucion=db_med.volumen_solucion,
+        principio_activo=db_med.principio_activo,
+        laboratorio=db_med.laboratorio,
+        registro_invima=db_med.registro_invima,
+        estado_cum=db_med.estado_cum,
+        activo=db_med.activo,
+        distancia=0.0,
+    )
 
 
 async def _buscar_medicamentos(
@@ -31,11 +55,19 @@ async def _buscar_medicamentos(
     return [
         MedicamentoNode(
             id=strawberry.ID(str(medicamento_id)),
+            nombre_comercial=nombre_comercial,
+            marca_comercial=marca_comercial,
             nombre_limpio=nombre_limpio,
+            dosis_cantidad=float(dosis_cantidad) if dosis_cantidad is not None else None,
+            dosis_unidad=dosis_unidad,
             distancia=float(distancia),
             id_cum=id_cum,
             laboratorio=laboratorio,
             forma_farmaceutica=forma_farmaceutica_val,
+            via_administracion=via_administracion,
+            presentacion=presentacion,
+            tipo_liberacion=tipo_liberacion,
+            volumen_solucion=float(volumen_solucion) if volumen_solucion is not None else None,
             registro_invima=registro_invima,
             principio_activo=principio_activo,
             precio_unitario=float(precios_map[id_cum].precio_sismed_minimo)
@@ -56,8 +88,16 @@ async def _buscar_medicamentos(
             nombre_limpio,
             distancia,
             id_cum,
+            nombre_comercial,
+            marca_comercial,
+            dosis_cantidad,
+            dosis_unidad,
             laboratorio,
             forma_farmaceutica_val,
+            via_administracion,
+            presentacion,
+            tipo_liberacion,
+            volumen_solucion,
             registro_invima,
             principio_activo,
             activo,

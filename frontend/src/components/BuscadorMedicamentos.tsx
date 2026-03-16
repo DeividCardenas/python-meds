@@ -1,17 +1,93 @@
-import { useLazyQuery } from "@apollo/client";
+import { gql, useLazyQuery } from "@apollo/client";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
 import {
     ComparativaPreciosDocument,
-    SearchMedicamentosDocument,
     type ComparativaPreciosQuery,
     type ComparativaPreciosQueryVariables,
-    type SearchMedicamentosQuery,
-    type SearchMedicamentosQueryVariables,
 } from "../graphql/generated";
 
-const toTitleCase = (value: string | null | undefined) =>
+type SearchMedicamentosQueryVariables = {
+  texto: string;
+  empresa?: string | null;
+  soloActivos?: boolean;
+  formaFarmaceutica?: string | null;
+};
+
+type SearchMedicamentoItem = {
+  id: string;
+  idCum?: string | null;
+  nombreComercial?: string | null;
+  marcaComercial?: string | null;
+  nombreLimpio: string;
+  dosisCantidad?: number | null;
+  dosisUnidad?: string | null;
+  formaFarmaceutica?: string | null;
+  viaAdministracion?: string | null;
+  presentacion?: string | null;
+  tipoLiberacion?: string | null;
+  volumenSolucion?: string | null;
+  principioActivo?: string | null;
+  laboratorio?: string | null;
+  registroInvima?: string | null;
+  estadoCum?: string | null;
+  activo: boolean;
+  esRegulado: boolean;
+  precioUnitario?: number | null;
+  precioEmpaque?: number | null;
+  precioMaximoRegulado?: number | null;
+};
+
+type SearchMedicamentosQuery = {
+  buscarMedicamentos: SearchMedicamentoItem[];
+};
+
+const SearchMedicamentosDocument = gql`
+  query SearchMedicamentos(
+    $texto: String!
+    $empresa: String
+    $soloActivos: Boolean
+    $formaFarmaceutica: String
+  ) {
+    buscarMedicamentos(
+      texto: $texto
+      empresa: $empresa
+      soloActivos: $soloActivos
+      formaFarmaceutica: $formaFarmaceutica
+    ) {
+      id
+      idCum
+      nombreComercial
+      marcaComercial
+      nombreLimpio
+      dosisCantidad
+      dosisUnidad
+      formaFarmaceutica
+      viaAdministracion
+      presentacion
+      tipoLiberacion
+      volumenSolucion
+      principioActivo
+      laboratorio
+      registroInvima
+      estadoCum
+      activo
+      esRegulado
+      precioUnitario
+      precioMaximoRegulado
+    }
+  }
+`;
+
+const sanitizeDisplayText = (value: string | null | undefined) =>
   (value ?? "")
+    .replace(/[�]/g, "")
+    .replace(/\?/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const toTitleCase = (value: string | null | undefined) =>
+  sanitizeDisplayText(value)
     .toLowerCase()
     .replace(/\b\p{L}/gu, (match) => match.toUpperCase())
     .trim();
@@ -34,7 +110,12 @@ export function BuscadorMedicamentos() {
   const [buscar, { data, loading }] = useLazyQuery<
     SearchMedicamentosQuery,
     SearchMedicamentosQueryVariables
-  >(SearchMedicamentosDocument);
+  >(SearchMedicamentosDocument, {
+    fetchPolicy: "network-only",
+    nextFetchPolicy: "network-only",
+    errorPolicy: "all",
+  });
+  const [buscarErrorState, setBuscarErrorState] = useState<string | null>(null);
   const [buscarComparativa, { data: comparativaData, loading: loadingComparativa, error: comparativaError }] = useLazyQuery<
     ComparativaPreciosQuery,
     ComparativaPreciosQueryVariables
@@ -78,9 +159,18 @@ export function BuscadorMedicamentos() {
       soloActivos,
       formaFarmaceutica: formaFarmaceutica.trim() || null,
     };
+    setBuscarErrorState(null);
     lastQueryRef.current = variables;
     setHasSearched(true);
-    buscar({ variables });
+    buscar({ variables })
+      .then((result) => {
+        if (result.error || (Array.isArray(result.errors) && result.errors.length > 0)) {
+          setBuscarErrorState("No se pudo conectar con el backend. Verifica el servicio e intenta nuevamente.");
+        }
+      })
+      .catch(() => {
+        setBuscarErrorState("No se pudo conectar con el backend. Verifica el servicio e intenta nuevamente.");
+      });
   };
 
   const abrirComparativa = (principioActivo: string | null | undefined) => {
@@ -176,7 +266,7 @@ export function BuscadorMedicamentos() {
   };
 
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white p-8 shadow-sm">
+    <section className="overflow-x-hidden rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-8">
       <div className="mb-8">
         <h2 className="text-2xl font-semibold text-slate-900">Buscador de Medicamentos</h2>
         <p className="mt-2 text-sm text-slate-500">Consulta coincidencias por nombre y filtra por laboratorio.</p>
@@ -216,8 +306,8 @@ export function BuscadorMedicamentos() {
       <div className="mt-4 flex flex-wrap items-center gap-4 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
         <span className="text-xs font-semibold uppercase tracking-wide text-slate-500">Filtros</span>
         {/* Forma farmacéutica */}
-        <div className="flex items-center gap-2">
-          <label htmlFor="filter-ff" className="whitespace-nowrap text-sm text-slate-600">Forma farmacéutica</label>
+        <div className="flex flex-wrap items-center gap-2">
+          <label htmlFor="filter-ff" className="text-sm text-slate-600">Forma farmacéutica</label>
           <input
             id="filter-ff"
             value={formaFarmaceutica}
@@ -249,6 +339,12 @@ export function BuscadorMedicamentos() {
       </div>
 
       <div className="mt-8">
+        {buscarErrorState ? (
+          <p className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+            {buscarErrorState}
+          </p>
+        ) : null}
+
         <div className="mb-4 flex flex-wrap items-center justify-end gap-2">
           <button
             type="button"
@@ -290,24 +386,56 @@ export function BuscadorMedicamentos() {
           </div>
         ) : null}
 
-        {!loading && resultados.length > 0 ? (
+        {!loading && !buscarErrorState && resultados.length > 0 ? (
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
             {resultados.map((item) => {
-              const nombreComercial = toTitleCase(item.nombreLimpio) || "Nombre comercial no disponible";
-              const principioActivo = toTitleCase(item.principioActivo);
-              const mostrarPrincipioActivo =
-                principioActivo.length > 0 && !nombreComercial.toLowerCase().includes(principioActivo.toLowerCase());
-
               return (
                 <article
                   key={item.id}
                   className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition duration-200 hover:scale-105 hover:shadow-lg"
                 >
-                  {item.esRegulado ? (
-                    <p className="mb-3 inline-flex rounded-full bg-orange-100 px-2.5 py-1 text-xs font-semibold text-orange-700">
-                      🔒 Regulado CNPMDM{item.precioMaximoRegulado ? ` · Máx ${formatPrice(item.precioMaximoRegulado)}` : ""}
-                    </p>
-                  ) : null}
+                  {/* Header: Nombre + Dosis */}
+                  <div className="mb-3 flex items-baseline justify-between gap-3">
+                    <div className="flex-1">
+                      <h3 className="break-words text-lg font-bold text-slate-900">
+                        {toTitleCase(item.nombreComercial || item.nombreLimpio || "Nombre no disponible")}
+                      </h3>
+                      {item.dosisCantidad != null && (
+                        <p className="mt-1 text-sm text-slate-500">
+                          {item.dosisCantidad} {item.dosisUnidad}
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Badge Regulado */}
+                    {item.esRegulado ? (
+                      <span className="inline-flex whitespace-nowrap rounded-full bg-orange-100 px-2.5 py-0.5 text-xs font-semibold text-orange-700">
+                        🔒 Regulado{item.precioMaximoRegulado ? ` · Máx ${formatPrice(item.precioMaximoRegulado)}` : ""}
+                      </span>
+                    ) : null}
+                  </div>
+
+                  {/* Badges: Forma + Vía + Liberación */}
+                  <div className="mb-3 flex flex-wrap gap-2">
+                    {item.formaFarmaceutica && (
+                      <span className="inline-flex rounded-full bg-blue-100 px-2.5 py-1 text-xs font-medium text-blue-700">
+                        {toTitleCase(item.formaFarmaceutica)}
+                      </span>
+                    )}
+
+                    {item.viaAdministracion && (
+                      <span className="inline-flex rounded-full bg-green-100 px-2.5 py-1 text-xs font-medium text-green-700">
+                        {toTitleCase(item.viaAdministracion)}
+                      </span>
+                    )}
+
+                    {item.tipoLiberacion && (
+                      <span className="inline-flex rounded-full bg-purple-100 px-2.5 py-1 text-xs font-medium text-purple-700">
+                        {toTitleCase(item.tipoLiberacion)}
+                      </span>
+                    )}
+                  </div>
+
                   {/* Badge de estado CUM */}
                   {item.estadoCum ? (
                     <span
@@ -319,33 +447,52 @@ export function BuscadorMedicamentos() {
                     >
                       {item.activo ? "✓" : "✗"} {item.estadoCum}
                     </span>
-                  ) : null}                  <h3 className="text-lg font-bold text-slate-900">{nombreComercial}</h3>
-                  {mostrarPrincipioActivo ? (
-                    <p className="mt-2 text-sm text-slate-500">
-                      Principio activo: <span className="font-medium text-slate-600">{principioActivo}</span>
+                  ) : null}
+
+                  {/* Principio Activo */}
+                  {item.principioActivo && (
+                    <p className="mb-2 break-words text-sm text-slate-600">
+                      <span className="font-medium">{toTitleCase(item.principioActivo)}</span>
                     </p>
-                  ) : null}
-                  {item.formaFarmaceutica ? (
-                    <p className="mt-2 text-xs font-medium text-slate-500">{toTitleCase(item.formaFarmaceutica)}</p>
-                  ) : null}
-                  <p className="mt-4 inline-flex rounded-md border border-slate-300 bg-slate-100 px-2.5 py-1 font-mono text-xs text-slate-700">
-                    {item.idCum ?? "ID CUM N/D"}
-                  </p>
-                  <p className="mt-5 flex items-center gap-2 text-sm text-slate-600">
-                    <svg viewBox="0 0 24 24" className="h-4 w-4 fill-none stroke-current stroke-2" aria-hidden="true">
-                      <path d="M3 21h18" />
-                      <path d="M5 21V9l7-4 7 4v12" />
-                      <path d="M9 21v-4h6v4" />
-                    </svg>
-                    {item.laboratorio ?? "Laboratorio no disponible"}
-                  </p>
+                  )}
+
+                  {/* Laboratorio */}
+                  {item.laboratorio && (
+                    <p className="mt-2 flex items-start gap-2 break-words text-sm text-slate-600">
+                      <svg viewBox="0 0 24 24" className="h-4 w-4 fill-none stroke-current stroke-2" aria-hidden="true">
+                        <path d="M3 21h18" />
+                        <path d="M5 21V9l7-4 7 4v12" />
+                        <path d="M9 21v-4h6v4" />
+                      </svg>
+                      {toTitleCase(item.laboratorio)}
+                    </p>
+                  )}
+
+                  {/* Presentación */}
+                  {item.presentacion && (
+                    <p className="mt-2 break-words text-xs text-slate-500">
+                      Presentación: <span className="font-medium">{toTitleCase(item.presentacion)}</span>
+                    </p>
+                  )}
+
+                  {/* Precio */}
+                  {item.precioUnitario && (
+                    <div className="mt-3 flex items-center justify-between rounded-lg bg-slate-50 px-3 py-2">
+                      <span className="text-xs text-slate-500">Precio unitario</span>
+                      <span className="font-semibold text-slate-900">
+                        {formatPrice(item.precioUnitario)}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Botón Comparativa */}
                   <button
                     type="button"
                     onClick={() => abrirComparativa(item.principioActivo)}
                     disabled={!item.principioActivo}
-                    className="mt-4 rounded-lg border border-blue-200 px-3 py-1.5 text-xs font-semibold text-blue-700 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
+                    className="mt-4 w-full rounded-lg border border-blue-200 px-3 py-1.5 text-xs font-semibold text-blue-700 transition hover:bg-blue-50 disabled:cursor-not-allowed disabled:opacity-50"
                   >
-                    Ver comparativa
+                    Ver comparativa de precios
                   </button>
                 </article>
               );
@@ -353,7 +500,7 @@ export function BuscadorMedicamentos() {
           </div>
         ) : null}
 
-        {!loading && hasSearched && resultados.length === 0 ? (
+        {!loading && !buscarErrorState && hasSearched && resultados.length === 0 ? (
           <p className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-500">
             No hay resultados para mostrar.
           </p>

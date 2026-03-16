@@ -7,7 +7,7 @@ import re
 from typing import Optional
 
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import bindparam, func, literal, select
+from sqlalchemy import and_, bindparam, func, literal, or_, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.medicamento import EMBEDDING_DIMENSION, Medicamento, PrecioReferencia
@@ -15,6 +15,37 @@ from app.models.medicamento import EMBEDDING_DIMENSION, Medicamento, PrecioRefer
 EMBEDDING_MODEL = "models/text-embedding-004"
 LETRA_PATTERN = "A-Za-zÁÉÍÓÚÜÑáéíóúüñ"
 logger = logging.getLogger(__name__)
+
+STOPWORDS_BUSQUEDA = {
+    "mg",
+    "ml",
+    "g",
+    "mcg",
+    "ug",
+    "meq",
+    "ui",
+    "tableta",
+    "tabletas",
+    "capsula",
+    "capsulas",
+    "cápsula",
+    "cápsulas",
+    "comprimido",
+    "comprimidos",
+    "gragea",
+    "grageas",
+    "suspension",
+    "suspensión",
+    "solucion",
+    "solución",
+    "oral",
+    "intravenosa",
+    "intramuscular",
+    "ampolla",
+    "ampollas",
+    "frasco",
+    "caja",
+}
 
 
 def _preparar_texto_busqueda(texto: str) -> str:
@@ -77,7 +108,17 @@ async def buscar_medicamentos_hibrido(
         solo_activos=solo_activos,
         forma_farmaceutica=forma_farmaceutica,
     )
-    return (await session.exec(statement.params(**params))).all()
+    results = (await session.exec(statement.params(**params))).all()
+    if results:
+        return results
+
+    fallback_statement, fallback_params = _construir_statement_fallback_textual(
+        texto_preparado=texto_preparado,
+        empresa=empresa,
+        solo_activos=solo_activos,
+        forma_farmaceutica=forma_farmaceutica,
+    )
+    return (await session.exec(fallback_statement.params(**fallback_params))).all()
 
 
 def _construir_statement_hibrido(
@@ -106,8 +147,16 @@ def _construir_statement_hibrido(
             Medicamento.nombre_limpio,
             distancia_expr,
             Medicamento.id_cum,
+            Medicamento.nombre_comercial,
+            Medicamento.marca_comercial,
+            Medicamento.dosis_cantidad,
+            Medicamento.dosis_unidad,
             Medicamento.laboratorio,
             Medicamento.forma_farmaceutica,
+            Medicamento.via_administracion,
+            Medicamento.presentacion,
+            Medicamento.tipo_liberacion,
+            Medicamento.volumen_solucion,
             Medicamento.registro_invima,
             Medicamento.principio_activo,
             Medicamento.activo,
@@ -134,6 +183,103 @@ def _construir_statement_hibrido(
         statement = statement.where(
             func.lower(Medicamento.forma_farmaceutica).contains(ff_norm)
         )
+
+    if empresa:
+        statement = (
+            statement.join(PrecioReferencia, PrecioReferencia.medicamento_id == Medicamento.id)
+            .where(PrecioReferencia.empresa == bindparam("empresa"))
+            .distinct()
+        )
+        params["empresa"] = empresa
+
+    return statement, params
+
+
+def _construir_statement_fallback_textual(
+    texto_preparado: str,
+    empresa: Optional[str],
+    solo_activos: bool = True,
+    forma_farmaceutica: Optional[str] = None,
+):
+    searchable_expr = func.lower(
+        func.concat(
+            func.coalesce(Medicamento.nombre_comercial, ""),
+            literal(" "),
+            func.coalesce(Medicamento.nombre_limpio, ""),
+            literal(" "),
+            func.coalesce(Medicamento.principio_activo, ""),
+            literal(" "),
+            func.coalesce(Medicamento.forma_farmaceutica, ""),
+            literal(" "),
+            func.coalesce(Medicamento.laboratorio, ""),
+        )
+    )
+
+    tokens = [token for token in texto_preparado.split() if token]
+    text_tokens = [
+        token
+        for token in tokens
+        if not token.isdigit() and token not in STOPWORDS_BUSQUEDA and len(token) > 2
+    ]
+    numeric_tokens = [token for token in tokens if token.isdigit()]
+    numeric_values: list[float] = []
+    for token in numeric_tokens:
+        try:
+            numeric_values.append(float(token))
+        except ValueError:
+            continue
+
+    text_conditions = [searchable_expr.ilike(bindparam(f"tok_txt_{idx}")) for idx, _ in enumerate(text_tokens)]
+    numeric_text_conditions = [searchable_expr.ilike(bindparam(f"tok_num_{idx}")) for idx, _ in enumerate(numeric_tokens)]
+    numeric_dose_conditions = [
+        func.abs(Medicamento.dosis_cantidad - bindparam(f"tok_num_val_{idx}")) <= 0.51
+        for idx, _ in enumerate(numeric_values)
+    ]
+
+    where_clause = and_(*text_conditions) if text_conditions else literal(True)
+    numeric_conditions = [*numeric_text_conditions, *numeric_dose_conditions]
+    if numeric_conditions:
+        where_clause = and_(where_clause, or_(*numeric_conditions))
+
+    statement = (
+        select(
+            Medicamento.id,
+            Medicamento.nombre_limpio,
+            literal(0.0).label("distancia"),
+            Medicamento.id_cum,
+            Medicamento.nombre_comercial,
+            Medicamento.marca_comercial,
+            Medicamento.dosis_cantidad,
+            Medicamento.dosis_unidad,
+            Medicamento.laboratorio,
+            Medicamento.forma_farmaceutica,
+            Medicamento.via_administracion,
+            Medicamento.presentacion,
+            Medicamento.tipo_liberacion,
+            Medicamento.volumen_solucion,
+            Medicamento.registro_invima,
+            Medicamento.principio_activo,
+            Medicamento.activo,
+            Medicamento.estado_cum,
+            literal(0.0).label("rank"),
+        )
+        .where(where_clause)
+        .order_by(Medicamento.nombre_limpio.asc())
+        .limit(10)
+    )
+
+    if solo_activos:
+        statement = statement.where(Medicamento.activo == True)  # noqa: E712
+
+    if forma_farmaceutica and forma_farmaceutica.strip():
+        ff_norm = forma_farmaceutica.strip().lower()
+        statement = statement.where(func.lower(Medicamento.forma_farmaceutica).contains(ff_norm))
+
+    params: dict[str, str] = {
+        **{f"tok_txt_{idx}": f"%{token}%" for idx, token in enumerate(text_tokens)},
+        **{f"tok_num_{idx}": f"%{token}%" for idx, token in enumerate(numeric_tokens)},
+        **{f"tok_num_val_{idx}": value for idx, value in enumerate(numeric_values)},
+    }
 
     if empresa:
         statement = (
