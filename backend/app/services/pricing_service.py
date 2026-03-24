@@ -9,15 +9,18 @@ from typing import Any
 from uuid import UUID, uuid4
 
 import polars as pl
-from sqlalchemy import bindparam, func, text
+from sqlalchemy import bindparam, func
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models.enums import CargaStatus
 from app.models.medicamento import Medicamento
 from app.models.pricing import ProveedorArchivo, StagingPrecioProveedor
+from app.services.pricing_integrity_service import (
+    PRICING_ENFORCE_INTEGRITY_CHECKS,
+    validar_integridad_publicacion_staging,
+)
 from app.services.normalizer import normalize_dataframe_column, normalize_pharma_text
-from app.services.supplier_detector import detectar_proveedor
 
 logger = logging.getLogger(__name__)
 
@@ -344,7 +347,7 @@ async def procesar_archivo_proveedor(
             # Rows without a CUM code start at None; the score is set after
             # fuzzy resolution below.
             confianza_score: Decimal | None = Decimal("1.0") if cum_code else None
-            estado = "AUTO_APROBADO" if cum_code else "PENDIENTE"
+            estado = "APROBADO" if cum_code else "PENDIENTE"
 
             staging_rows.append(
                 {
@@ -389,7 +392,7 @@ async def procesar_archivo_proveedor(
                         row["confianza_score"] = Decimal(str(round(best_score, 4)))
                         if best_score >= AUTO_APPROVE_THRESHOLD:
                             row["cum_code"] = sugerencias[0]["id_cum"]
-                            row["estado_homologacion"] = "AUTO_APROBADO"
+                            row["estado_homologacion"] = "APROBADO"
 
         # ── Resolve medicamento_id for ALL rows with a known CUM code ──────
         # This covers both rows with a direct CUM from the supplier file and
@@ -508,18 +511,31 @@ async def publicar_precios_aprobados(
                     "No se permite re-publicar el mismo archivo para evitar duplicados en precios_proveedor."
                 )
 
-            # Step 2 – select all APROBADO and AUTO_APROBADO staging rows
+            # Step 2 – select all APROBADO staging rows
             stmt = (
                 select(StagingPrecioProveedor)
                 .where(StagingPrecioProveedor.archivo_id == archivo_uuid)
-                .where(StagingPrecioProveedor.estado_homologacion.in_(["APROBADO", "AUTO_APROBADO"]))
+                .where(StagingPrecioProveedor.estado_homologacion == "APROBADO")
             )
             filas = (await session.exec(stmt)).all()
 
             if not filas:
                 raise ValueError(
-                    f"No hay filas con estado APROBADO o AUTO_APROBADO para el archivo {archivo_id}. "
+                    f"No hay filas con estado APROBADO para el archivo {archivo_id}. "
                     "Revisa y aprueba filas en la pantalla de homologación antes de publicar."
+                )
+
+            # Step 2c – cross-DB integrity validation before publishing.
+            # Blocks publication when quality gates fail, to avoid contaminating
+            # the production prices table with inconsistent data.
+            integrity_report = await validar_integridad_publicacion_staging(
+                filas,
+                catalog_session_factory=catalog_session_factory,
+            )
+            if PRICING_ENFORCE_INTEGRITY_CHECKS and integrity_report.blocking_violations > 0:
+                raise ValueError(
+                    "Bloqueado por reglas de integridad de publicación: "
+                    f"{integrity_report.to_dict()}"
                 )
 
             # Step 2b – resolve medicamento_id for rows that still have NULL
@@ -574,9 +590,10 @@ async def publicar_precios_aprobados(
             await session.commit()
 
             logger.info(
-                "Publicados %d precios del archivo %s → precios_proveedor",
+                "Publicados %d precios del archivo %s → precios_proveedor (integrity=%s)",
                 len(filas),
                 archivo_id,
+                integrity_report.to_dict(),
             )
             return {"filas_publicadas": len(filas)}
 

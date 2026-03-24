@@ -1,0 +1,13 @@
+{
+  "archivo_origen": "bases\\Hoja de cálculo sin título - Hoja 1.csv",
+  "filas_origen": 29132,
+  "filas_rechazadas_criticas": 57,
+  "filas_validas_previas_dedup": 29075,
+  "filas_validas_finales": 21660,
+  "filas_con_cum_final": 10088,
+  "filas_sin_cum_final": 11572,
+  "dedup_removidas_con_cum": 6216,
+  "dedup_removidas_sin_cum": 1199,
+  "archivo_validado": "bases\\tarifas_base1_validada_final_sin_redundancia.csv",
+  "archivo_rechazados": "bases\\tarifas_base1_rechazadas_con_motivo.csv"
+}

@@ -1,4 +1,21 @@
 services:
+  neo4j:
+    image: neo4j:5.22-community
+    environment:
+      NEO4J_AUTH: ${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD}
+      NEO4J_dbms_security_procedures_unrestricted: gds.*
+      NEO4J_dbms_memory_pagecache_size: 512m
+      NEO4J_dbms_memory_heap_initial__size: 512m
+      NEO4J_dbms_memory_heap_max__size: 512m
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    networks:
+      - meds-network
+
   db:
     image: pgvector/pgvector:pg15
     environment:
@@ -48,6 +65,10 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
       OPENAI_KEY: ${OPENAI_KEY:-}
       SOCRATA_APP_TOKEN: ${SOCRATA_APP_TOKEN:-}
+      NEO4J_URI: ${NEO4J_URI:-bolt://neo4j:7687}
+      NEO4J_USER: ${NEO4J_USER:-neo4j}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-neo4j_password}
+      NEO4J_DATABASE: ${NEO4J_DATABASE:-neo4j}
       CUM_BATCH_SIZE: ${CUM_BATCH_SIZE:-2000}
       PYTHONPATH: /app
     volumes:
@@ -75,6 +96,10 @@ services:
       CELERY_RESULT_BACKEND: ${CELERY_RESULT_BACKEND}
       OPENAI_KEY: ${OPENAI_KEY:-}
       SOCRATA_APP_TOKEN: ${SOCRATA_APP_TOKEN:-}
+      NEO4J_URI: ${NEO4J_URI:-bolt://neo4j:7687}
+      NEO4J_USER: ${NEO4J_USER:-neo4j}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-neo4j_password}
+      NEO4J_DATABASE: ${NEO4J_DATABASE:-neo4j}
       CUM_BATCH_SIZE: ${CUM_BATCH_SIZE:-2000}
       PYTHONPATH: /app
     volumes:
@@ -91,11 +116,14 @@ services:
       - meds-network
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: ${VITE_API_URL:-http://localhost:8000/graphql}
     environment:
       VITE_API_URL: ${VITE_API_URL:-http://localhost:8000/graphql}
     ports:
-      - "${FRONTEND_PORT:-3000}:80"
+      - "${FRONTEND_PORT:-3000}:3000"
     depends_on:
       - backend
     networks:
@@ -167,5 +195,7 @@ networks:
     driver: bridge
 
 volumes:
+  neo4j_data:
+  neo4j_logs:
   postgres_data:
   pgadmin_data:

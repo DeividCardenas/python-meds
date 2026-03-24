@@ -1,0 +1,8 @@
+{
+  "xlsx_rows_valid": 24258,
+  "db_rows_valid": 24253,
+  "xlsx_cums_found_in_db": 6899,
+  "xlsx_cums_missing_in_db": 17359,
+  "xlsx_price_equal_db_count": 6899,
+  "xlsx_price_diff_db_count": 0
+}

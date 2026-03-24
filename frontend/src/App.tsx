@@ -3,8 +3,9 @@ import { useMemo, useState } from "react";
 import { BuscadorMedicamentos } from "./components/BuscadorMedicamentos";
 import { CargaProveedor } from "./components/CargaProveedor";
 import { CotizadorHospital } from "./components/CotizadorHospital";
+import { TarifasProcessingModule } from "./components/TarifasProcessingModule";
 
-const sections = ["Buscador", "Cotizador", "Proveedores", "Auditoría"] as const;
+const sections = ["Buscador", "Cotizador", "Proveedores", "Cruce Tarifas"] as const;
 type Section = (typeof sections)[number];
 
 function App() {
@@ -60,12 +61,7 @@ function App() {
           {activeSection === "Buscador" ? <BuscadorMedicamentos /> : null}
           {activeSection === "Cotizador" ? <CotizadorHospital /> : null}
           {activeSection === "Proveedores" ? <CargaProveedor /> : null}
-          {activeSection === "Auditoría" ? (
-            <section className="rounded-xl border border-slate-200 bg-white p-8 shadow-sm">
-              <h2 className="text-lg font-semibold">Auditoría</h2>
-              <p className="mt-2 text-sm text-slate-600">Próximamente: bitácora de trazabilidad y eventos de carga.</p>
-            </section>
-          ) : null}
+          {activeSection === "Cruce Tarifas" ? <TarifasProcessingModule /> : null}
         </main>
       </div>
     </div>

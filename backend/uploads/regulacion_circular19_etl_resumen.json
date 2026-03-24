@@ -1,0 +1,9 @@
+{
+  "source_rows": 35313,
+  "valid_rows_after_rules": 24253,
+  "rejected_rows": 11060,
+  "invalid_cum_rows": 11,
+  "invalid_price_rows": 11055,
+  "output_csv": "backend\\uploads\\regulacion_circular19_etl_import.csv",
+  "rejects_csv": "backend\\uploads\\regulacion_circular19_etl_rechazados.csv"
+}

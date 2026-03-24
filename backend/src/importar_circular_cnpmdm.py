@@ -42,8 +42,9 @@ import logging
 import os
 import re
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from uuid import uuid4
 
 # ---------------------------------------------------------------------------
 # Configurar path para importar modelos del backend
@@ -54,6 +55,7 @@ sys.path.insert(0, str(_BACKEND_DIR))
 import asyncio
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from app.models.medicamento import PrecioReguladoCNPMDM  # noqa: F401 – needed to create table
@@ -123,6 +125,18 @@ def _parse_int(value: str) -> int | None:
         return None
 
 
+def _parse_date(value: str) -> date | None:
+    if not value or not str(value).strip():
+        return None
+    raw = str(value).strip()
+    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(raw, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
 def _construir_id_cum(expediente: str, consecutivo: str) -> str | None:
     exp = _parse_int(expediente)
     cons = _parse_int(consecutivo)
@@ -180,6 +194,7 @@ def cargar_csv(
     col_cum: str | None = None,
     col_precio: str | None = None,
     circular: str | None = None,
+    vigencia_desde: date | None = None,
     delimiter: str = ",",
     encoding: str = "utf-8-sig",
 ) -> list[dict]:
@@ -257,6 +272,7 @@ def cargar_csv(
                     "id_cum": id_cum,
                     "precio_maximo_venta": precio,
                     "circular_origen": circular,
+                    "fecha_inicio_vigencia": vigencia_desde or ahora.date(),
                     "ultima_actualizacion": ahora,
                 }
             )
@@ -275,12 +291,40 @@ async def upsert_en_bd(records: list[dict], database_url: str) -> int:
     async_session = async_sessionmaker(engine, expire_on_commit=False)
 
     tabla = PrecioReguladoCNPMDM.__table__
+    historial_table = "precios_regulados_cnpmdm_historial"
     total = 0
 
     async with async_session() as session:
         for i in range(0, len(records), _UPSERT_BATCH):
             batch = records[i : i + _UPSERT_BATCH]
-            stmt = pg_insert(tabla).values(batch)
+            batch_current = [
+                {
+                    "id_cum": r.get("id_cum"),
+                    "precio_maximo_venta": r.get("precio_maximo_venta"),
+                    "circular_origen": r.get("circular_origen"),
+                    "ultima_actualizacion": r.get("ultima_actualizacion"),
+                }
+                for r in batch
+            ]
+
+            batch_cums = [str(r["id_cum"]) for r in batch if r.get("id_cum")]
+            existing_rows: dict[str, dict[str, float | str | None]] = {}
+            if batch_cums:
+                prev_stmt = text(
+                    """
+                    SELECT id_cum, precio_maximo_venta, circular_origen
+                    FROM precios_regulados_cnpmdm
+                    WHERE id_cum = ANY(:cums)
+                    """
+                ).bindparams(bindparam("cums", expanding=True))
+                prev_result = await session.execute(prev_stmt, {"cums": batch_cums})
+                for row in prev_result.fetchall():
+                    existing_rows[str(row.id_cum)] = {
+                        "precio_maximo_venta": float(row.precio_maximo_venta) if row.precio_maximo_venta is not None else None,
+                        "circular_origen": row.circular_origen,
+                    }
+
+            stmt = pg_insert(tabla).values(batch_current)
             stmt = stmt.on_conflict_do_update(
                 index_elements=["id_cum"],
                 set_={
@@ -292,6 +336,67 @@ async def upsert_en_bd(records: list[dict], database_url: str) -> int:
             result = await session.execute(stmt)
             total += result.rowcount
             logger.info("  Lote %d-%d → %d filas", i + 1, i + len(batch), result.rowcount)
+
+            history_rows: list[dict] = []
+            close_rows: list[dict] = []
+            for rec in batch:
+                id_cum = str(rec.get("id_cum") or "").strip()
+                if not id_cum:
+                    continue
+                new_price = float(rec.get("precio_maximo_venta")) if rec.get("precio_maximo_venta") is not None else None
+                new_circular = rec.get("circular_origen")
+                vigencia_inicio = rec.get("fecha_inicio_vigencia") or date.today()
+                previous = existing_rows.get(id_cum)
+
+                changed = (
+                    previous is None
+                    or previous.get("precio_maximo_venta") != new_price
+                    or (previous.get("circular_origen") or "") != (new_circular or "")
+                )
+                if not changed:
+                    continue
+
+                history_rows.append(
+                    {
+                        "id": uuid4(),
+                        "id_cum": id_cum,
+                        "precio_maximo_venta": rec.get("precio_maximo_venta"),
+                        "circular_origen": new_circular,
+                        "fecha_inicio_vigencia": vigencia_inicio,
+                        "fecha_fin_vigencia": None,
+                        "ultima_actualizacion": rec.get("ultima_actualizacion"),
+                    }
+                )
+                close_rows.append(
+                    {
+                        "id_cum": id_cum,
+                        "fecha_fin": vigencia_inicio - timedelta(days=1),
+                    }
+                )
+
+            if history_rows:
+                for row in close_rows:
+                    await session.execute(
+                        text(
+                            f"""
+                            UPDATE {historial_table}
+                            SET fecha_fin_vigencia = :fecha_fin
+                            WHERE id_cum = :id_cum AND fecha_fin_vigencia IS NULL
+                            """
+                        ),
+                        row,
+                    )
+
+                hist_insert = text(
+                    f"""
+                    INSERT INTO {historial_table}
+                        (id, id_cum, precio_maximo_venta, circular_origen, fecha_inicio_vigencia, fecha_fin_vigencia, ultima_actualizacion)
+                    VALUES
+                        (:id, :id_cum, :precio_maximo_venta, :circular_origen, :fecha_inicio_vigencia, :fecha_fin_vigencia, :ultima_actualizacion)
+                    ON CONFLICT (id_cum, circular_origen, fecha_inicio_vigencia) DO NOTHING
+                    """
+                )
+                await session.execute(hist_insert, history_rows)
 
         await session.commit()
 
@@ -318,6 +423,7 @@ async def main_async(args: argparse.Namespace) -> None:
         col_cum=args.col_cum,
         col_precio=args.col_precio,
         circular=args.circular,
+        vigencia_desde=_parse_date(args.vigencia_desde) if args.vigencia_desde else None,
         delimiter=args.delimiter,
         encoding=args.encoding,
     )
@@ -365,6 +471,12 @@ def main() -> None:
         metavar="TEXTO",
         default=None,
         help='Identificador de la circular, ej. "Circular 013 de 2022".',
+    )
+    parser.add_argument(
+        "--vigencia-desde",
+        metavar="YYYY-MM-DD",
+        default=None,
+        help="Fecha de inicio de vigencia para historial (si se omite usa hoy).",
     )
     parser.add_argument(
         "--delimiter",

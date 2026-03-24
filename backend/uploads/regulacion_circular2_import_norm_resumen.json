@@ -1,0 +1,9 @@
+{
+  "xlsx_valid_norm_rows": 24155,
+  "db_norm_rows": 24253,
+  "found_in_db": 24150,
+  "missing_in_db": 5,
+  "equal_price_rows": 24150,
+  "diff_price_rows": 0,
+  "output_csv": "backend\\uploads\\regulacion_circular2_import_norm.csv"
+}

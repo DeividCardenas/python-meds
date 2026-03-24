@@ -1,0 +1,27 @@
+{
+  "source_file": "bases\\Hoja de cálculo sin título - Hoja 1.csv",
+  "source_rows": 29132,
+  "base_valid_rows": 8493,
+  "base_invalid_rows": 13191,
+  "ambiguous_duplicate_rows": 1331,
+  "with_regulation_rows": 177,
+  "without_regulation_rows": 8316,
+  "alerts_over_regulated_rows": 0,
+  "safe_for_load_rows": 177,
+  "kept_out_for_review_rows": 22838,
+  "files": {
+    "safe_for_load_csv": "backend\\uploads\\proveedor_regulacion_apto_carga.csv",
+    "alerts_csv": "backend\\uploads\\proveedor_regulacion_alertas_precio.csv",
+    "review_csv": "backend\\uploads\\proveedor_regulacion_revision_no_cuadra.csv",
+    "reg_snapshot_csv": "backend\\uploads\\regulacion_snapshot_for_cross.csv"
+  },
+  "strict_rule_ratio_min": 0.1,
+  "strict_rule_ratio_max": 1.0,
+  "rows_rejected_by_ratio_rule": 177,
+  "safe_for_load_rows_strict": 0,
+  "kept_out_for_review_rows_strict": 23015,
+  "files_strict": {
+    "safe_for_load_csv": "backend\\uploads\\proveedor_regulacion_apto_carga_strict.csv",
+    "review_csv": "backend\\uploads\\proveedor_regulacion_revision_no_cuadra_strict.csv"
+  }
+}

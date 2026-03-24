@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Optional
 from uuid import UUID
 
 import strawberry
@@ -27,7 +26,7 @@ from app.repositories import staging_repo
 from app.worker.tasks import (
     task_procesar_archivo,
     task_procesar_invima,
-    task_procesar_archivo_proveedor,
+    task_procesar_archivo_proveedor_neo4j,
     task_cotizar_medicamentos,
     task_sincronizar_cum,
     task_sincronizar_precios_sismed,
@@ -38,6 +37,7 @@ from app.graphql.types.pricing import (
     StagingFilaNode,
     PublicarResultadoNode,
     MapeoColumnasInput,
+    ConfirmarMapeoProveedorResultadoNode,
 )
 from app.graphql.types.cotizacion import CotizacionLoteNode
 from app.graphql.types.sync import SincronizacionTareaNode, SincronizacionCatalogosNode
@@ -114,15 +114,15 @@ class Mutation:
         self,
         archivo_id: strawberry.ID,
         mapeo: MapeoColumnasInput,
-    ) -> ProveedorArchivoNode:
+    ) -> ConfirmarMapeoProveedorResultadoNode:
         """
         Step 2: user confirms (or corrects) the column mapping.
         Triggers background ETL to stage all rows with JSONB vault.
         """
         try:
             archivo_uuid = UUID(str(archivo_id))
-        except ValueError:
-            raise ValueError("archivo_id inválido")
+        except ValueError as exc:
+            raise ValueError("archivo_id inválido") from exc
 
         mapeo_dict: dict[str, str] = {}
         if mapeo.cum_code:
@@ -147,6 +147,8 @@ class Mutation:
             if archivo is None:
                 raise ValueError(f"ProveedorArchivo {archivo_id} no encontrado")
             archivo.mapeo_columnas = mapeo_dict
+            # El archivo queda listo para procesamiento asíncrono inmediato.
+            archivo.status = CargaStatus.PROCESSING
             session.add(archivo)
             await session.commit()
             await session.refresh(archivo)
@@ -156,14 +158,38 @@ class Mutation:
         if stored_path is None:
             raise FileNotFoundError(f"No se encontró el archivo para {archivo_uuid}")
 
-        task_procesar_archivo_proveedor.delay(str(archivo_uuid), str(stored_path), mapeo_dict)
+        try:
+            async_result = task_procesar_archivo_proveedor_neo4j.delay(
+                archivo_id=str(archivo_uuid),
+                file_path=str(stored_path),
+                column_map=mapeo_dict,
+            )
+        except Exception as exc:  # noqa: BLE001
+            # Si Celery no encola, devolvemos el archivo a PENDING y reportamos error claro.
+            async with AsyncPricingSessionLocal() as session:
+                db_archivo = await session.get(ProveedorArchivo, archivo_uuid)
+                if db_archivo is not None:
+                    db_archivo.status = CargaStatus.PENDING
+                    db_archivo.errores_log = {
+                        "error": f"No se pudo encolar task_procesar_archivo_proveedor_neo4j: {type(exc).__name__}: {exc}"
+                    }
+                    session.add(db_archivo)
+                    await session.commit()
+            raise ValueError("No se pudo encolar el procesamiento en background. Verifique Celery/Redis.") from exc
 
-        return ProveedorArchivoNode(
+        archivo_node = ProveedorArchivoNode(
             id=strawberry.ID(str(archivo.id)),
             filename=archivo.filename,
-            status=CargaStatus.PENDING.value,
+            status=CargaStatus.PROCESSING.value,
             columnas_detectadas=archivo.columnas_detectadas,
             mapeo_sugerido=json.dumps(mapeo_dict),
+        )
+
+        return ConfirmarMapeoProveedorResultadoNode(
+            ok=True,
+            mensaje="Mapeo confirmado y archivo encolado para procesamiento automático en Neo4j.",
+            task_id=str(async_result.id),
+            archivo=archivo_node,
         )
 
     @strawberry.mutation
@@ -178,8 +204,8 @@ class Mutation:
         """
         try:
             staging_uuid = UUID(str(staging_id))
-        except ValueError:
-            raise ValueError("staging_id inválido")
+        except ValueError as exc:
+            raise ValueError("staging_id inválido") from exc
 
         async with AsyncPricingSessionLocal() as session:
             fila = await staging_repo.aprobar_fila(session, staging_uuid, id_cum)
@@ -216,8 +242,8 @@ class Mutation:
         """
         try:
             archivo_uuid = UUID(str(archivo_id))
-        except ValueError:
-            raise ValueError("archivo_id inválido")
+        except ValueError as exc:
+            raise ValueError("archivo_id inválido") from exc
 
         resultado = await publicar_precios_aprobados(
             str(archivo_uuid),

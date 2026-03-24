@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
@@ -12,6 +12,7 @@ from sqlalchemy import (
     CheckConstraint,
     Column,
     Computed,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -169,6 +170,8 @@ class MedicamentoCUM(SQLModel, table=True):
     __table_args__ = (
         Index("ix_medicamentos_cum_registrosanitario", "registrosanitario"),
         Index("ix_medicamentos_cum_expediente", "expediente"),
+        Index("ix_medicamentos_cum_estado_origen", "estado_origen"),
+        Index("ix_medicamentos_cum_fecha_corte_dato", "fecha_corte_dato"),
         Index(
             "ix_medicamentos_cum_principioactivo_gin",
             text("lower(coalesce(principioactivo, '')) gin_trgm_ops"),
@@ -227,6 +230,8 @@ class MedicamentoCUM(SQLModel, table=True):
     nombrerol: str | None = Field(default=None, sa_column=Column(String, nullable=True))
     tiporol: str | None = Field(default=None, sa_column=Column(String, nullable=True))
     modalidad: str | None = Field(default=None, sa_column=Column(String, nullable=True))
+    estado_origen: str | None = Field(default=None, sa_column=Column(String, nullable=True))
+    fecha_corte_dato: datetime | None = Field(default=None, sa_column=Column(DateTime(timezone=True), nullable=True))
 
 
 class CUMSyncLog(SQLModel, table=True):
@@ -415,6 +420,58 @@ class PrecioReguladoCNPMDM(SQLModel, table=True):
     )
 
     # Fecha de carga/actualización del registro en la BD.
+    ultima_actualizacion: datetime | None = Field(
+        default=None,
+        sa_column=Column(DateTime(timezone=True), nullable=True),
+    )
+
+
+class PrecioReguladoCNPMDMHistorial(SQLModel, table=True):
+    """
+    Historial versionado de regulación CNPMDM por CUM.
+
+    Conserva cambios de precio/circular con ventanas de vigencia para
+    auditoría y analítica histórica.
+    """
+
+    __tablename__ = "precios_regulados_cnpmdm_historial"
+    __table_args__ = (
+        UniqueConstraint(
+            "id_cum",
+            "circular_origen",
+            "fecha_inicio_vigencia",
+            name="uq_precio_regulado_historial_cum_circular_inicio",
+        ),
+        Index("ix_precios_regulados_historial_id_cum", "id_cum"),
+        Index("ix_precios_regulados_historial_inicio", "fecha_inicio_vigencia"),
+        Index("ix_precios_regulados_historial_fin", "fecha_fin_vigencia"),
+    )
+
+    id: UUID = Field(
+        default_factory=uuid4,
+        sa_column=Column(PGUUID(as_uuid=True), primary_key=True),
+    )
+    created_at: datetime = Field(
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+        )
+    )
+    updated_at: datetime = Field(
+        sa_column=Column(
+            DateTime(timezone=True),
+            nullable=False,
+            server_default=func.now(),
+            onupdate=func.now(),
+        )
+    )
+
+    id_cum: str = Field(sa_column=Column(String, nullable=False))
+    precio_maximo_venta: Decimal = Field(sa_column=Column(Numeric(14, 4), nullable=False))
+    circular_origen: str | None = Field(default=None, sa_column=Column(String, nullable=True))
+    fecha_inicio_vigencia: date = Field(sa_column=Column(Date, nullable=False))
+    fecha_fin_vigencia: date | None = Field(default=None, sa_column=Column(Date, nullable=True))
     ultima_actualizacion: datetime | None = Field(
         default=None,
         sa_column=Column(DateTime(timezone=True), nullable=True),

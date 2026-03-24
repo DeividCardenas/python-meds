@@ -5,6 +5,7 @@ from typing import Optional
 from uuid import UUID
 
 import strawberry
+from celery.result import AsyncResult
 from sqlmodel import select
 
 from app.core.db import AsyncSessionLocal, AsyncPricingSessionLocal
@@ -16,12 +17,85 @@ from app.repositories import medicamento_repo, cotizacion_repo, staging_repo
 from app.graphql.types.medicamento import MedicamentoNode, CargaArchivoNode, SugerenciaCUMNode
 from app.graphql.types.pricing import StagingFilaNode
 from app.graphql.types.cotizacion import CotizacionLoteNode
+from app.graphql.types.sync import TaskStatusNode
 from app.graphql.mappers.medicamento import _buscar_medicamentos
 from app.graphql.mappers.cotizacion import _lote_to_node
+from app.worker.tasks import celery_app
 
 
 @strawberry.type
 class Query:
+    @strawberry.field
+    async def consultar_estado_tarea(self, task_id: str) -> TaskStatusNode:
+        """Consulta el estado real de una tarea Celery por task_id."""
+        async_result = AsyncResult(task_id, app=celery_app)
+        try:
+            status = str(async_result.status)
+            info = async_result.info
+        except Exception as exc:  # noqa: BLE001
+            return TaskStatusNode(
+                task_id=task_id,
+                status="FAILURE",
+                mensaje="No se pudo consultar el estado de la tarea en este momento.",
+                progress_pct=0.0,
+                resultado=None,
+                error=f"Backend Celery no disponible: {type(exc).__name__}: {exc}",
+            )
+
+        mensaje_por_estado = {
+            "PENDING": "La tarea está en cola o aún no ha sido tomada por un worker.",
+            "RECEIVED": "La tarea fue recibida por el worker.",
+            "STARTED": "La tarea está iniciando procesamiento.",
+            "PROCESSING": "La tarea se está procesando.",
+            "RETRY": "La tarea está en reintento.",
+            "SUCCESS": "La tarea finalizó exitosamente.",
+            "FAILURE": "La tarea falló durante el procesamiento.",
+            "REVOKED": "La tarea fue cancelada.",
+        }
+
+        resultado = None
+        error = None
+        progress_pct: Optional[float] = None
+
+        def _to_float(value: object) -> Optional[float]:
+            if value is None:
+                return None
+            if isinstance(value, (int, float)):
+                return float(value)
+            try:
+                return float(str(value))
+            except (TypeError, ValueError):
+                return None
+
+        if status == "SUCCESS":
+            raw_result = async_result.result
+            progress_pct = 100.0
+            if isinstance(raw_result, (dict, list, str, int, float, bool)) or raw_result is None:
+                resultado = raw_result
+            else:
+                resultado = str(raw_result)
+        elif status == "FAILURE":
+            progress_pct = 0.0
+            error = str(info) if info is not None else "Error no disponible"
+        elif status == "PENDING":
+            progress_pct = 0.0
+        elif isinstance(info, dict):
+            # Para STARTED/PROCESSING/RETRY, exponer metadatos de progreso.
+            resultado = info
+            current = _to_float(info.get("current"))
+            total = _to_float(info.get("total"))
+            if current is not None and total is not None and total > 0:
+                progress_pct = round((current / total) * 100.0, 2)
+
+        return TaskStatusNode(
+            task_id=task_id,
+            status=status,
+            mensaje=mensaje_por_estado.get(status, f"Estado actual: {status}"),
+            progress_pct=progress_pct,
+            resultado=resultado,
+            error=error,
+        )
+
     @strawberry.field
     async def buscar_medicamentos(
         self,

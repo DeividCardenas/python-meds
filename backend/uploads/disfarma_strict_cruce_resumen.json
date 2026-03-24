@@ -1,0 +1,15 @@
+{
+  "supplier_rows_raw": 9062,
+  "base_valid_rows": 7293,
+  "base_invalid_rows": 534,
+  "with_regulation_rows": 1703,
+  "without_regulation_rows": 5590,
+  "alerts_rows": 47,
+  "safe_for_load_rows": 1656,
+  "kept_for_review_rows": 6171,
+  "outputs": {
+    "safe_csv": "backend\\uploads\\disfarma_strict_apto_carga.csv",
+    "alerts_csv": "backend\\uploads\\disfarma_strict_alertas.csv",
+    "review_csv": "backend\\uploads\\disfarma_strict_revision.csv"
+  }
+}

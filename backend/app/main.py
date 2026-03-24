@@ -1,4 +1,5 @@
 import os
+from datetime import date
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,6 +13,7 @@ from slowapi.middleware import SlowAPIMiddleware
 
 from app.graphql.schema import schema
 from app.models.enums import CotizacionStatus
+from app.services.auditoria_metricas_service import AuditoriaMetricasService
 
 # ---------------------------------------------------------------------------
 # Rate limiter — 120 req/min por IP por defecto; 20 req/min en el endpoint
@@ -96,3 +98,22 @@ async def exportar_cotizacion(
         media_type=media_type,
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@app.get("/auditoria/neo4j/kpis")
+@limiter.limit("30/minute")
+async def auditoria_kpis_neo4j(
+    request: Request,
+    fecha_desde: date,
+    fecha_hasta: date,
+) -> dict[str, object]:
+    """Retorna KPIs del dashboard de revisoría fiscal desde Neo4j."""
+    _ = request
+    if fecha_desde > fecha_hasta:
+        raise HTTPException(status_code=400, detail="fecha_desde no puede ser mayor que fecha_hasta")
+
+    try:
+        with AuditoriaMetricasService() as service:
+            return service.dashboard_kpis(fecha_desde=fecha_desde, fecha_hasta=fecha_hasta)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Error consultando métricas de auditoría: {exc}") from exc

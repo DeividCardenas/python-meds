@@ -42,6 +42,16 @@ class PublicarResultadoNode:
     status: str
 
 
+@strawberry.type
+class ConfirmarMapeoProveedorResultadoNode:
+    """Response payload after confirming mapping and dispatching background task."""
+
+    ok: bool
+    mensaje: str
+    task_id: Optional[str]
+    archivo: ProveedorArchivoNode
+
+
 @strawberry.input
 class MapeoColumnasInput:
     cum_code: Optional[str] = None
